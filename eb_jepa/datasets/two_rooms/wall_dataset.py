@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from scipy.stats import truncnorm
 
+from ..base import DatasetBase, DatasetConfigBase, TrajectoryBatch
 from .dot_dataset import DotDataset, DotDatasetConfig
 from .utils import (
     generate_wall_layouts,
@@ -24,7 +25,7 @@ class WallSample(NamedTuple):
 
 
 @dataclass
-class WallDatasetConfig(DotDatasetConfig):
+class WallDatasetConfig(DotDatasetConfig, DatasetConfigBase):
     fix_wall: bool = True
     fix_wall_batch_k: Optional[int] = None
 
@@ -1134,3 +1135,42 @@ class WallDataset(DotDataset):
         res = (res * 255).clamp(0, 255).to(torch.uint8)
 
         return res
+
+    # DatasetBase method implementations
+    def __getitem__(self, i) -> TrajectoryBatch:
+        """
+        Return a trajectory batch in unified TrajectoryBatch format.
+
+        This wraps the original WallSample output in the TrajectoryBatch format
+        while maintaining backward compatibility.
+        """
+        # Get original sample
+        wall_sample = super(DotDataset, self).__getitem__(i)
+
+        # Convert to TrajectoryBatch format
+        # states: [T, 1, H, W] -> [1, T, H, W] (single channel, squeeze out channel dim)
+        states = wall_sample.states.unsqueeze(0)  # Add batch dim if needed
+
+        # actions: [T, 2] -> already correct format
+        actions = wall_sample.actions
+
+        # Create metadata dict with environment-specific data
+        metadata = {
+            "locations": wall_sample.locations,
+            "wall_x": wall_sample.wall_x,
+            "door_y": wall_sample.door_y,
+        }
+
+        return TrajectoryBatch(states=states, actions=actions, metadata=metadata)
+
+    def get_env_specific_params(self) -> dict:
+        """
+        Return environment-specific parameters needed for rendering.
+
+        For Two Rooms, this includes wall and door positions.
+        """
+        # These are typically retrieved from the sample metadata
+        return {
+            "has_wall": True,
+            "has_door": True,
+        }

@@ -144,10 +144,11 @@ def run(
         num_eval_episodes = eval_cfg_dict.get("meta", {}).get("num_eval_episodes", 10)
 
         def env_creator():
-            from eb_jepa.datasets.two_rooms.env import DotWall
+            from eb_jepa.datasets.registry import EnvironmentRegistry
 
             cfg_eval_env = eval_cfg_dict.get("env")
-            return DotWall(
+            return EnvironmentRegistry.create_env(
+                name=cfg.data.env_name,
                 config=env_config,
                 **cfg_eval_env,
             )

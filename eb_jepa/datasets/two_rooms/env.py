@@ -5,6 +5,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 
+from ..base import EnvBase
 from .normalizer import Normalizer
 from .utils import check_wall_intersect
 from .wall_dataset import WallDatasetConfig
@@ -13,7 +14,7 @@ InfoType = Dict[str, Any]
 ObsType = torch.Tensor
 
 
-class DotWall(gym.Env):
+class DotWall(EnvBase, gym.Env):
     def __init__(
         self,
         config: WallDatasetConfig,
@@ -434,3 +435,33 @@ class DotWall(gym.Env):
         batched_output = torch.stack(output, dim=0)
 
         return batched_output
+
+    # EnvBase abstract method implementations
+    def get_action_space_info(self) -> Dict[str, Any]:
+        """Return action space information for Two Rooms environment."""
+        return {
+            "type": "continuous",
+            "dim": 2,
+            "low": self.action_space.low[0],
+            "high": self.action_space.high[0],
+        }
+
+    def get_observation_space_info(self) -> Dict[str, Any]:
+        """Return observation space information for Two Rooms environment."""
+        return {
+            "shape": self.observation_space.shape,  # (2, img_size, img_size)
+            "dtype": "float32",
+        }
+
+    def render_from_latent(self, latent: torch.Tensor, **kwargs) -> torch.Tensor:
+        """
+        Render pixel observations from latent representations.
+
+        For Two Rooms, this uses the coord_to_pixel method with wall parameters.
+        """
+        # This method is primarily used through the planning adapter
+        # which calls coord_to_pixel directly
+        wall_x = kwargs.get("wall_x", self.wall_x if hasattr(self, "wall_x") else None)
+        door_y = kwargs.get("door_y", self.hole_y if hasattr(self, "hole_y") else None)
+
+        return self.coord_to_pixel(latent, wall_x=wall_x, door_y=door_y)

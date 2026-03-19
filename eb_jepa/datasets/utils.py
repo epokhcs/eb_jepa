@@ -3,8 +3,11 @@ from pathlib import Path
 import torch
 import yaml
 
+from eb_jepa.datasets.registry import EnvironmentRegistry
 from eb_jepa.datasets.two_rooms.utils import update_config_from_yaml
-from eb_jepa.datasets.two_rooms.wall_dataset import WallDataset, WallDatasetConfig
+
+# Import to trigger registration
+import eb_jepa.datasets.two_rooms  # noqa: F401
 
 DATASETS_DIR = Path(__file__).parent
 
@@ -26,23 +29,33 @@ def init_data(env_name, cfg_data=None, **kwargs):
     and merges with any overrides from cfg_data.
 
     Args:
-        env_name: Name of the environment (currently only "two_rooms" is supported).
+        env_name: Name of the environment (e.g., "two_rooms", "atari").
         cfg_data: Configuration overrides for the dataset.
 
     Returns:
         Tuple of (train_loader, val_loader, config).
     """
-    if env_name != "two_rooms":
-        raise ValueError(f"Unknown env: {env_name}. Only 'two_rooms' is supported.")
+    # Check if environment is registered
+    if not EnvironmentRegistry.is_registered(env_name):
+        available = ", ".join(EnvironmentRegistry.list_environments())
+        raise ValueError(
+            f"Unknown env: {env_name}. Available environments: {available}"
+        )
 
+    # Load and merge config
     merged_cfg = load_env_data_config(env_name, cfg_data)
-    config = update_config_from_yaml(WallDatasetConfig, merged_cfg)
 
+    # Get config class from registry and instantiate
+    config_class = EnvironmentRegistry.get_config_class(env_name)
+    config = update_config_from_yaml(config_class, merged_cfg)
+
+    # Extract dataloader settings
     num_workers = merged_cfg.get("num_workers", 0)
     pin_mem = merged_cfg.get("pin_mem", False)
     persistent_workers = merged_cfg.get("persistent_workers", False) and num_workers > 0
 
-    dset = WallDataset(config=config)
+    # Create dataset using registry
+    dset = EnvironmentRegistry.create_dataset(env_name, config)
     loader = torch.utils.data.DataLoader(
         dset,
         batch_size=config.batch_size,
@@ -53,7 +66,8 @@ def init_data(env_name, cfg_data=None, **kwargs):
         persistent_workers=persistent_workers,
     )
 
-    val_dset = WallDataset(config=config)
+    # Create validation dataset
+    val_dset = EnvironmentRegistry.create_dataset(env_name, config)
     val_loader = torch.utils.data.DataLoader(
         val_dset,
         batch_size=4,
