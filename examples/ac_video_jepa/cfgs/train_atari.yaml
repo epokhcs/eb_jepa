@@ -1,0 +1,67 @@
+# ATARI Breakout Training Configuration for ac_video_jepa
+
+meta:
+  model_folder: null
+  eval_only_mode: false
+  num_eval_episodes: 20
+
+data:
+  env_name: atari
+  game_name: Breakout
+  dobs: 1  # Grayscale
+  img_size: 84
+  batch_size: 32
+  size: 10000
+  val_size: 1000
+  n_steps: 200
+  sample_length: 17
+  normalize: true
+  num_workers: 0
+  pin_mem: false
+  persistent_workers: false
+
+model:
+  encoder: impala
+  predictor: rnn
+  action_embedding_dim: 64  # Embedding dimension for discrete actions
+  dobs: 1
+  henc: 256
+  dstc: 256
+  dlat_out: 512
+
+loss:
+  pred_coeff: 1.0
+  var_coeff: 16.0
+  cov_coeff: 8.0
+  sim_coeff: 12.0
+  idm_coeff: 1.0
+
+optim:
+  optimizer: adamw
+  lr: 1e-4
+  weight_decay: 1e-5
+  epochs: 500
+  warmup_epochs: 10
+  eval_freq: 10
+
+logging:
+  use_wandb: false
+  project_name: ac_video_jepa_atari
+  log_freq: 100
+
+# Environment configuration for evaluation
+env:
+  normalize: true
+  grayscale: true
+  frame_skip: 4
+
+# Planning configuration (for evaluation)
+planning:
+  planner: cem
+  n_iters: 30
+  num_samples: 300
+  plan_length: 15
+  var_scale: 1.0
+  num_elites: 10
+  action_type: discrete  # CRITICAL: Set to discrete for ATARI
+  # num_actions will be automatically determined from environment
