@@ -550,8 +550,17 @@ class CEMPlanner(Planner):
         max_norm_dims: Optional[List[List[int]]] = None,
         decode_each_iteration: bool = True,
         decode_loc_to_pixel: Optional[Callable] = None,
+        action_type: str = "continuous",  # "continuous" or "discrete"
+        num_actions: Optional[int] = None,  # For discrete actions
         **kwargs,
     ):
+        """
+        Cross-Entropy Method planner.
+
+        Args:
+            action_type: "continuous" or "discrete"
+            num_actions: Number of discrete actions (required if action_type="discrete")
+        """
         super().__init__(unroll)
         self.n_iters = n_iters
         self.num_samples = num_samples
@@ -565,6 +574,39 @@ class CEMPlanner(Planner):
         self.decode_each_iteration = decode_each_iteration
         self.decode_loc_to_pixel = decode_loc_to_pixel
 
+        # Discrete action support
+        self.action_type = action_type
+        self.num_actions = num_actions
+        if action_type == "discrete" and num_actions is None:
+            raise ValueError("num_actions must be specified for discrete action spaces")
+
+    def _sample_discrete_actions(
+        self, mean_logits: torch.Tensor, temperature: float, num_samples: int
+    ) -> torch.Tensor:
+        """
+        Sample discrete actions using categorical distribution.
+
+        Args:
+            mean_logits: [T, num_actions] logits representing action distribution
+            temperature: Sampling temperature (higher = more exploration)
+            num_samples: Number of samples to generate
+
+        Returns:
+            actions: [T, num_samples, 1] discrete action indices as floats
+        """
+        plan_length = mean_logits.shape[0]
+
+        # Convert logits to probabilities with temperature
+        probs = torch.softmax(mean_logits / temperature, dim=-1)  # [T, num_actions]
+
+        # Sample actions: [T, num_samples]
+        actions = torch.multinomial(
+            probs, num_samples=num_samples, replacement=True
+        )
+
+        # Convert to float and add action dimension: [T, num_samples, 1]
+        return actions.float().unsqueeze(-1)
+
     @torch.no_grad()
     def plan(
         self, obs_init, steps_left=None, eval_mode=True, t0=False, plan_vis_path=None
@@ -575,18 +617,33 @@ class CEMPlanner(Planner):
             plan_length = min(self.plan_length, steps_left)
 
         # Initialize mean and std for the action distribution
-        mean = torch.zeros(plan_length, self.action_dim, device=self.device)
-        std = self.var_scale * torch.ones(
-            plan_length, self.action_dim, device=self.device
-        )
+        if self.action_type == "discrete":
+            # For discrete actions, mean represents logits over actions
+            # Initialize with uniform distribution
+            mean = torch.zeros(plan_length, self.num_actions, device=self.device)
+            temperature = self.var_scale  # Temperature for sampling
+        else:
+            # For continuous actions
+            mean = torch.zeros(plan_length, self.action_dim, device=self.device)
+            std = self.var_scale * torch.ones(
+                plan_length, self.action_dim, device=self.device
+            )
 
         # Initialize actions tensor
-        actions = torch.empty(
-            plan_length,
-            self.num_samples,
-            self.action_dim,
-            device=self.device,
-        )
+        if self.action_type == "discrete":
+            actions = torch.empty(
+                plan_length,
+                self.num_samples,
+                1,  # Single discrete action index
+                device=self.device,
+            )
+        else:
+            actions = torch.empty(
+                plan_length,
+                self.num_samples,
+                self.action_dim,
+                device=self.device,
+            )
 
         losses = []
         elite_means = []
@@ -596,12 +653,17 @@ class CEMPlanner(Planner):
         # CEM iterations
         for _ in range(self.n_iters):
             # Sample actions
-            actions[:, :] = mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(
-                plan_length,
-                self.num_samples,
-                self.action_dim,
-                device=std.device,
-            )  # T B A
+            if self.action_type == "discrete":
+                actions[:, :] = self._sample_discrete_actions(
+                    mean, temperature, self.num_samples
+                )
+            else:
+                actions[:, :] = mean.unsqueeze(1) + std.unsqueeze(1) * torch.randn(
+                    plan_length,
+                    self.num_samples,
+                    self.action_dim,
+                    device=std.device,
+                )  # T B A
 
             # Apply clipping if max_norms is specified
             if self.max_norms is not None:
@@ -632,8 +694,26 @@ class CEMPlanner(Planner):
             elite_stds.append(elite_loss.std().item())
 
             # Update parameters
-            mean = torch.mean(elite_actions, dim=1)
-            std = torch.std(elite_actions, dim=1)
+            if self.action_type == "discrete":
+                # For discrete actions, update logits based on elite action counts
+                # Create one-hot encoding of elite actions
+                elite_actions_flat = elite_actions.reshape(-1).long()  # [T*num_elites]
+                elite_actions_onehot = torch.nn.functional.one_hot(
+                    elite_actions_flat, num_classes=self.num_actions
+                ).float()  # [T*num_elites, num_actions]
+
+                # Reshape and aggregate
+                elite_actions_onehot = elite_actions_onehot.reshape(
+                    plan_length, self.num_elites, self.num_actions
+                )
+
+                # Update logits as log of empirical distribution
+                action_counts = elite_actions_onehot.sum(dim=1) + 1e-8  # [T, num_actions]
+                mean = torch.log(action_counts)  # Update logits
+            else:
+                # For continuous actions
+                mean = torch.mean(elite_actions, dim=1)
+                std = torch.std(elite_actions, dim=1)
 
             if self.decode_each_iteration:
                 predicted_best_encs = self.unroll(
@@ -648,7 +728,11 @@ class CEMPlanner(Planner):
             save_decoded_frames(pred_frames_over_iterations, losses, plan_vis_path)
 
         # Return the first action(s)
-        a = mean
+        if self.action_type == "discrete":
+            # For discrete actions, return the mode (most likely action)
+            a = torch.argmax(mean, dim=-1, keepdim=True).float()  # [T, 1]
+        else:
+            a = mean
 
         return PlanningResult(
             actions=a,
