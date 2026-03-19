@@ -60,8 +60,9 @@ export WANDB_MODE=disabled
 python examples/ac_video_jepa/main.py \
   --fname examples/ac_video_jepa/cfgs/train.yaml \
   --optim.epochs 1 \
-  --data.size 100 \
-  --data.val_size 20 \
+  --data.size 1000 \
+  --data.val_size 200 \
+  --data.batch_size 32 \
   --data.num_workers 0
 ```
 
@@ -77,8 +78,9 @@ export WANDB_MODE=disabled
 python examples/ac_video_jepa/main.py \
   --fname examples/ac_video_jepa/cfgs/train_atari.yaml \
   --optim.epochs 1 \
-  --data.size 100 \
-  --data.val_size 20 \
+  --data.size 1000 \
+  --data.val_size 200 \
+  --data.batch_size 32 \
   --data.num_workers 0
 ```
 
@@ -176,7 +178,7 @@ export WANDB_API_KEY="your_key_here"
 
 ### UnboundLocalError in training
 
-This is a known bug in the original codebase when running with very small datasets or certain configurations. It occurs when `total_loss` is referenced before being assigned. This is not related to the ATARI implementation.
+This was a bug in the original codebase when running with very small datasets (batch_size > dataset_size). Fixed in commit 30838ce. Make sure your batch_size is smaller than your dataset size.
 
 ## Project Structure
 
@@ -216,9 +218,7 @@ eb_jepa/
 
 ## Known Issues
 
-- Training may hit `UnboundLocalError` with very small datasets (pre-existing bug)
 - Wandb API key authentication may fail (use `WANDB_MODE=disabled`)
-- Some dependencies may not be available on all platforms (e.g., `decord` on Mac ARM)
 
 ## Next Steps
 
