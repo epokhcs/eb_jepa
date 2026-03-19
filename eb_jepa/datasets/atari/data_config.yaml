@@ -1,0 +1,37 @@
+# ATARI Dataset Configuration
+env_name: atari
+game_name: Breakout
+
+# Observation settings
+dobs: 1  # Grayscale (1 channel)
+img_size: 84  # Standard ATARI resolution
+grayscale: true
+frame_stack: 1
+frame_skip: 4
+
+# Action settings
+action_repeat: 1
+
+# Dataset settings
+size: 10000
+val_size: 1000
+batch_size: 32
+n_steps: 200  # Trajectory length
+sample_length: 17  # Training sample length
+
+# Training settings
+normalize: true
+device: cuda
+train: true
+
+# Evaluation settings
+score_based_success: true
+success_score_threshold: 20.0
+
+# Data collection
+random_policy: true
+
+# DataLoader settings
+num_workers: 0
+pin_mem: false
+persistent_workers: false

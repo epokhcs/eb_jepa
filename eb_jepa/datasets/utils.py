@@ -8,6 +8,7 @@ from eb_jepa.datasets.two_rooms.utils import update_config_from_yaml
 
 # Import to trigger registration
 import eb_jepa.datasets.two_rooms  # noqa: F401
+import eb_jepa.datasets.atari  # noqa: F401
 
 DATASETS_DIR = Path(__file__).parent
 
