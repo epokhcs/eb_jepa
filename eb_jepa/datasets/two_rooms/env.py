@@ -64,20 +64,21 @@ class DotWall(EnvBase, gym.Env):
         )
 
         self.normalize = normalize
+        self._normalizer = None
         if self.normalize:
-            self.normalizer = Normalizer()
+            self._normalizer = Normalizer()
 
     def _get_normalized_obs(self, obs):
         """Normalize observation if needed."""
         if self.normalize:
             if obs.dtype != torch.float32:
                 obs = obs.float()
-            return self.normalizer.normalize_state(obs)
+            return self._normalizer.normalize_state(obs)
         return obs
 
     def _get_normalized_location(self, location):
         if self.normalize:
-            return self.normalizer.normalize_location(location)
+            return self._normalizer.normalize_location(location)
         return location
 
     @property
@@ -465,3 +466,8 @@ class DotWall(EnvBase, gym.Env):
         door_y = kwargs.get("door_y", self.hole_y if hasattr(self, "hole_y") else None)
 
         return self.coord_to_pixel(latent, wall_x=wall_x, door_y=door_y)
+
+    @property
+    def normalizer(self):
+        """Return the normalizer for this environment."""
+        return self._normalizer

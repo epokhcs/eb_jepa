@@ -4,10 +4,13 @@ import torch
 
 try:
     import gymnasium as gym
+    import ale_py
+    # Register ALE environments with gymnasium
+    gym.register_envs(ale_py)
 except ImportError:
     raise ImportError(
-        "gymnasium is required for ATARI environments. "
-        "Install with: pip install gymnasium[atari]"
+        "gymnasium and ale-py are required for ATARI environments. "
+        "Install with: pip install gymnasium ale-py"
     )
 
 from ..base import EnvBase
