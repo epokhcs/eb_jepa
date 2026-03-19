@@ -307,6 +307,14 @@ def run(
             desc=f"Epoch {epoch}/{cfg.optim.epochs - 1}",
             disable=cfg.logging.get("tqdm_silent", False),
         )
+
+        # Initialize epoch-level metrics (in case of empty dataloader)
+        total_loss = torch.tensor(0.0, device=device)
+        regl = torch.tensor(0.0, device=device)
+        pl = torch.tensor(0.0, device=device)
+        xy_loss = torch.tensor(0.0, device=device)
+        global_step = epoch * len(loader)  # Initialize for empty dataloader case
+
         for idx, (x, a, loc, _, _) in pbar:
             itr_start_time = time()
             global_step = epoch * len(loader) + idx
