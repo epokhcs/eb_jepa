@@ -14,6 +14,21 @@ This guide shows how to run the ac_video_jepa framework with both Two Rooms (ori
 
 ### 1. Create Virtual Environment
 
+#### Option A: Mac with Apple Silicon (M4/M3/M2/M1) - Recommended
+
+```bash
+# One-command setup with MPS (GPU) acceleration
+./setup-mac.sh
+```
+
+This automatically:
+- Creates `.venv` environment
+- Installs Mac-optimized dependencies
+- Verifies Apple Silicon GPU (MPS) support
+- Enables ~5-10x faster training vs CPU
+
+#### Option B: Standard Setup (Any Platform)
+
 ```bash
 # Using uv (recommended)
 uv venv .venv
@@ -23,6 +38,11 @@ python -m venv .venv
 ```
 
 ### 2. Install Dependencies
+
+#### Mac (after running setup-mac.sh)
+Already done! Skip to step 3.
+
+#### Other Platforms
 
 ```bash
 # Activate environment
@@ -175,6 +195,22 @@ Or use your API key:
 ```bash
 export WANDB_API_KEY="your_key_here"
 ```
+
+## Device Support
+
+The framework automatically detects the best available device:
+- **CUDA** (NVIDIA GPU) if available
+- **MPS** (Apple Silicon M4/M3/M2/M1 GPU) if on Mac
+- **CPU** as fallback
+
+To check your device:
+```bash
+python eb_jepa/device_utils.py
+```
+
+For Mac users with Apple Silicon, use `./setup-mac.sh` for automatic MPS (GPU) acceleration setup.
+
+See [DEVICE_SUPPORT.md](DEVICE_SUPPORT.md) for detailed device configuration.
 
 ### UnboundLocalError in training
 

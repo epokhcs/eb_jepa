@@ -92,7 +92,14 @@ def run(
     # -- SETUP
     setup_device("auto")
     setup_seed(cfg.meta.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Device detection: CUDA > MPS > CPU
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
 
     # -- WANDB
     wandb_run = setup_wandb(

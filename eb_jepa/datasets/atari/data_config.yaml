@@ -21,7 +21,7 @@ sample_length: 17  # Training sample length
 
 # Training settings
 normalize: true
-device:  # Auto-detect (CPU/CUDA). Set to 'cpu' or 'cuda' to override.
+device:  # Auto-detect (CUDA > MPS > CPU). Set to 'cpu', 'cuda', or 'mps' to override.
 train: true
 
 # Evaluation settings

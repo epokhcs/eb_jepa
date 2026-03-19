@@ -1,0 +1,34 @@
+# Requirements for Mac with Apple Silicon (M4/M3/M2/M1) GPU acceleration
+# Uses MPS (Metal Performance Shaders) backend for GPU acceleration
+
+# Core ML/Deep Learning (Mac-optimized)
+--index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Vision and RL
+gymnasium>=0.29.0
+ale-py>=0.8.0
+
+# Utilities
+einops>=0.7.0
+fire>=0.5.0
+omegaconf>=2.3.0
+pyyaml>=6.0
+scipy>=1.11.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+opencv-python>=4.8.0
+tqdm>=4.65.0
+scikit-learn>=1.3.0
+seaborn>=0.12.0
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+
+# Logging (optional)
+wandb>=0.15.0
+
+# Note: MPS (Metal Performance Shaders) support is built into PyTorch for Mac
+# No additional dependencies needed for M4/M3/M2/M1 GPU acceleration
+# PyTorch will automatically detect and use MPS when available
