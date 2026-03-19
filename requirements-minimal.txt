@@ -1,0 +1,15 @@
+# Minimal requirements for ac_video_jepa ATARI testing
+torch>=2.0.0
+torchvision>=0.15.0
+einops>=0.7.0
+gymnasium>=1.0.0
+ale-py>=0.8.0
+fire>=0.5.0
+omegaconf>=2.3.0
+pyyaml>=6.0
+scipy>=1.10.0
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+opencv-python>=4.8.0
+tqdm>=4.65.0
