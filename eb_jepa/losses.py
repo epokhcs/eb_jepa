@@ -167,6 +167,50 @@ class InverseDynamicsLoss(torch.nn.Module):
         return idm_loss
 
 
+class DiscreteInverseDynamicsLoss(torch.nn.Module):
+    """
+    Cross-entropy loss for discrete action prediction.
+
+    Used for environments with discrete action spaces (like ATARI).
+    """
+
+    def __init__(self, idm: nn.Module):
+        """
+        Args:
+            idm (nn.Module): Inverse dynamics model that outputs logits for discrete actions
+        """
+        super().__init__()
+        self.idm = idm
+
+    def forward(self, x: torch.Tensor, actions: torch.Tensor):
+        """
+        Args:
+            x: [T, B, D] - States across time steps
+            actions: [B, 1, T] - Ground truth discrete action indices
+        """
+        if x.shape[0] <= 1 or actions is None:
+            return torch.tensor(0.0, device=x.device)
+
+        t, b, d = x.shape
+
+        states_t = x[:-1].transpose(0, 1)  # [B, T-1, D]
+        states_t_plus_1 = x[1:].transpose(0, 1)  # [B, T-1, D]
+
+        states_t_flat = states_t.reshape(-1, d)  # [B*(T-1), D]
+        states_t_plus_1_flat = states_t_plus_1.reshape(-1, d)  # [B*(T-1), D]
+
+        # Get logits from IDM
+        logits = self.idm(states_t_flat, states_t_plus_1_flat)  # [B*(T-1), num_actions]
+
+        # Prepare target actions: [B, 1, T] -> [B, T] -> [B, T-1] -> [B*(T-1)]
+        target_actions = actions.squeeze(1)[:, :-1].reshape(-1).long()
+
+        # Compute cross-entropy loss
+        idm_loss = F.cross_entropy(logits, target_actions)
+
+        return idm_loss
+
+
 class VC_IDM_Sim_Regularizer(torch.nn.Module):
     def __init__(
         self,

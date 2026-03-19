@@ -418,13 +418,29 @@ class RNNPredictor(nn.Module):
         action_dim: Optional[int] = 2,
         num_layers: int = 1,
         final_ln: Optional[torch.nn.Module] = None,
+        action_encoder: Optional[nn.Module] = None,
     ):
+        """
+        Args:
+            hidden_size: Hidden size for GRU
+            action_dim: Action dimension (for continuous) or embedding dim (for discrete)
+            num_layers: Number of GRU layers
+            final_ln: Final layer normalization
+            action_encoder: Optional encoder for discrete actions (e.g., DiscreteActionEncoder)
+        """
         super(RNNPredictor, self).__init__()
 
         self.num_layers = num_layers
+        self.action_encoder = action_encoder if action_encoder is not None else nn.Identity()
+
+        # Determine input size for GRU based on whether action encoder is used
+        if action_encoder is not None and hasattr(action_encoder, 'embedding_dim'):
+            gru_input_size = action_encoder.embedding_dim
+        else:
+            gru_input_size = action_dim
 
         self.rnn = torch.nn.GRU(
-            input_size=action_dim,
+            input_size=gru_input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
         )
@@ -439,13 +455,16 @@ class RNNPredictor(nn.Module):
 
         Args:
             state: [B, D, 1, 1, 1]
-            action: [B, A, 1]
+            action: [B, A, 1] (continuous or discrete)
         Returns:
             next_state: [B, D, 1, 1, 1]
         """
+        # Encode actions (identity for continuous, embedding for discrete)
+        action = self.action_encoder(action)  # [B, A, 1] -> [B, encoded_dim, 1]
+
         # This only does one step
         rnn_state = state.flatten(1, 4).unsqueeze(0).contiguous()  # [1, B, D]
-        rnn_input = action.squeeze(-1).unsqueeze(0).contiguous()  # [1, B, A]
+        rnn_input = action.squeeze(-1).unsqueeze(0).contiguous()  # [1, B, encoded_dim]
 
         next_state, _ = self.rnn(rnn_input, rnn_state)
 
@@ -478,6 +497,83 @@ class InverseDynamicsModel(nn.Module):
             state_t_plus_1: State at time t+1, shape [B, D]
         Returns:
             predicted_action: Action predicted to transform state_t to state_t_plus_1, shape [B, A]
+        """
+        combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
+        return self.model(combined_states)
+
+
+class DiscreteActionEncoder(nn.Module):
+    """
+    Embeds discrete action indices into continuous vectors.
+
+    This is required for discrete action spaces (like ATARI) where actions
+    are represented as integers rather than continuous vectors.
+    """
+
+    def __init__(self, num_actions: int, embedding_dim: int):
+        """
+        Args:
+            num_actions: Number of discrete actions
+            embedding_dim: Dimension of the action embedding
+        """
+        super().__init__()
+        self.embedding = nn.Embedding(num_actions, embedding_dim)
+        self.num_actions = num_actions
+        self.embedding_dim = embedding_dim
+
+    def forward(self, actions: torch.Tensor) -> torch.Tensor:
+        """
+        Embed discrete actions into continuous space.
+
+        Args:
+            actions: [B, 1, T] discrete action indices
+
+        Returns:
+            embedded: [B, embedding_dim, T] continuous action vectors
+        """
+        # actions: [B, 1, T] -> squeeze to [B, T]
+        actions_squeezed = actions.squeeze(1).long()
+
+        # Embed: [B, T] -> [B, T, embedding_dim]
+        embedded = self.embedding(actions_squeezed)
+
+        # Transpose to [B, embedding_dim, T] to match expected format
+        return embedded.transpose(1, 2)
+
+
+class DiscreteInverseDynamicsModel(nn.Module):
+    """
+    Predicts discrete action from state transition.
+
+    Outputs logits for cross-entropy loss instead of continuous predictions.
+    """
+
+    def __init__(self, state_dim: int, hidden_dim: int, num_actions: int):
+        """
+        Args:
+            state_dim: Dimension of state representation
+            hidden_dim: Hidden layer dimension
+            num_actions: Number of discrete actions
+        """
+        super().__init__()
+        self.model = nn.Sequential(
+            nn.Linear(state_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, num_actions),  # Output logits
+        )
+        self.apply(init_module_weights)
+        self.num_actions = num_actions
+
+    def forward(self, state_t: torch.Tensor, state_t_plus_1: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            state_t: State at time t, shape [B, D]
+            state_t_plus_1: State at time t+1, shape [B, D]
+
+        Returns:
+            logits: Action logits, shape [B, num_actions]
         """
         combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
         return self.model(combined_states)
