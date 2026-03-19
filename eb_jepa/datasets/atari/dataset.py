@@ -24,7 +24,15 @@ class AtariDataset(DatasetBase):
             config: AtariConfig with dataset settings
         """
         self.config = config
-        self.device = torch.device(config.device)
+
+        # Setup device with auto-detection if not specified
+        if config.device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(config.device)
+
+        # Update config device to match detected device
+        self.config.device = str(self.device)
 
         # Create environment for data collection
         self.env = AtariEnv(config)

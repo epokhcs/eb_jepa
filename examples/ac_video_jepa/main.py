@@ -163,6 +163,17 @@ def run(
     print(f"Saved complete config to {config_path}")
 
     # -- MODEL
+    # Check environment action space to configure model properly
+    from eb_jepa.datasets.registry import EnvironmentRegistry
+    dummy_env = EnvironmentRegistry.create_env(cfg.data.env_name, data_config)
+    action_space_info = dummy_env.get_action_space_info()
+    dummy_env.close() if hasattr(dummy_env, 'close') else None
+
+    is_discrete = action_space_info['type'] == 'discrete'
+    action_dim = action_space_info.get('n', action_space_info.get('dim', 2))
+
+    logger.info(f"Action space: {action_space_info}")
+
     test_input = torch.rand(
         (
             1,
@@ -185,10 +196,28 @@ def run(
     )
     test_output = encoder(test_input)
     _, f, _, h, w = test_output.shape
+
+    # Configure action encoder based on action space type
+    if is_discrete:
+        # Discrete actions: use embedding layer
+        from eb_jepa.architectures import DiscreteActionEncoder
+        embedding_dim = cfg.model.get('action_embedding_dim', 64)
+        aencoder = DiscreteActionEncoder(num_actions=action_dim, embedding_dim=embedding_dim).to(device)
+        predictor_action_dim = embedding_dim
+        logger.info(f"Using discrete action encoder: {action_dim} actions -> {embedding_dim}D embeddings")
+    else:
+        # Continuous actions: pass through directly
+        aencoder = nn.Identity()
+        predictor_action_dim = action_dim
+        logger.info(f"Using continuous actions: {action_dim}D")
+
     predictor = RNNPredictor(
-        hidden_size=encoder.mlp_output_dim, final_ln=encoder.final_ln
+        hidden_size=encoder.mlp_output_dim,
+        final_ln=encoder.final_ln,
+        action_encoder=aencoder,
+        action_dim=predictor_action_dim,
     )
-    aencoder = nn.Identity()
+
     if cfg.model.regularizer.use_proj:
         projector = Projector(
             f"{encoder.mlp_output_dim}-{encoder.mlp_output_dim*4}-{encoder.mlp_output_dim*4}"
@@ -196,27 +225,49 @@ def run(
     else:
         projector = None
     logger.info(f"Encoder output: {tuple(test_output.shape)}")
-    idm = InverseDynamicsModel(
-        state_dim=h
-        * w
-        * (projector.out_dim if cfg.model.regularizer.idm_after_proj else f),
-        hidden_dim=256,
-        action_dim=2,
-    ).to(device)
+
+    # Configure IDM based on action space type
+    if is_discrete:
+        # Discrete IDM: predict action class
+        from eb_jepa.architectures import DiscreteInverseDynamicsModel
+        from eb_jepa.losses import DiscreteInverseDynamicsLoss
+        idm = DiscreteInverseDynamicsModel(
+            state_dim=h * w * (projector.out_dim if cfg.model.regularizer.idm_after_proj else f),
+            hidden_dim=256,
+            num_actions=action_dim,
+        ).to(device)
+        idm_loss_fn = DiscreteInverseDynamicsLoss(idm)
+        logger.info(f"Using discrete IDM: predicts {action_dim} action classes")
+    else:
+        # Continuous IDM: predict action vector
+        from eb_jepa.losses import InverseDynamicsLoss
+        idm = InverseDynamicsModel(
+            state_dim=h * w * (projector.out_dim if cfg.model.regularizer.idm_after_proj else f),
+            hidden_dim=256,
+            action_dim=action_dim,
+        ).to(device)
+        idm_loss_fn = InverseDynamicsLoss(idm)
+        logger.info(f"Using continuous IDM: predicts {action_dim}D action vectors")
+
+    # Create regularizer with pre-wrapped IDM loss
+    # We pass idm=None and manually set idm_loss_fn to use the correct loss type
     regularizer = VC_IDM_Sim_Regularizer(
         cov_coeff=cfg.model.regularizer.cov_coeff,
         std_coeff=cfg.model.regularizer.std_coeff,
         sim_coeff_t=cfg.model.regularizer.sim_coeff_t,
         idm_coeff=cfg.model.regularizer.get("idm_coeff", 0.1),
-        idm=idm,
+        idm=None,  # Don't let regularizer create the loss wrapper
         first_t_only=cfg.model.regularizer.get("first_t_only"),
         projector=projector,
         spatial_as_samples=cfg.model.regularizer.spatial_as_samples,
         idm_after_proj=cfg.model.regularizer.idm_after_proj,
         sim_t_after_proj=cfg.model.regularizer.sim_t_after_proj,
     )
+    # Manually set the IDM loss function
+    regularizer.idm_loss_fn = idm_loss_fn
     ploss = SquareLossSeq()
-    jepa = JEPA(encoder, aencoder, predictor, regularizer, ploss).to(device)
+    # Note: aencoder is None here because it's integrated into the predictor
+    jepa = JEPA(encoder, nn.Identity(), predictor, regularizer, ploss).to(device)
 
     # Log model structure and parameters
     encoder_params = sum(p.numel() for p in encoder.parameters())
@@ -315,13 +366,26 @@ def run(
         xy_loss = torch.tensor(0.0, device=device)
         global_step = epoch * len(loader)  # Initialize for empty dataloader case
 
-        for idx, (x, a, loc, _, _) in pbar:
+        for idx, batch in pbar:
             itr_start_time = time()
             global_step = epoch * len(loader) + idx
 
+            # Unpack batch - handle both old tuple format and new TrajectoryBatch format
+            if isinstance(batch, (tuple, list)) and len(batch) == 3:
+                # New TrajectoryBatch format: (states, actions, metadata)
+                x, a, metadata = batch
+                # Extract locations if available (Two Rooms specific)
+                loc = metadata.get("locations", None) if isinstance(metadata, dict) else None
+            elif isinstance(batch, (tuple, list)) and len(batch) == 5:
+                # Old format: (x, a, loc, _, _)
+                x, a, loc, _, _ = batch
+            else:
+                raise ValueError(f"Unexpected batch format: {type(batch)}, length={len(batch) if hasattr(batch, '__len__') else 'N/A'}")
+
             x = x.to(device)
             a = a.to(device)
-            loc = loc.to(device)
+            if loc is not None:
+                loc = loc.to(device)
             total_loss = torch.tensor(0.0, device=device)
 
             # Calculate JEPA loss
@@ -352,20 +416,24 @@ def run(
             scaler.update()
             jepa_scheduler.step()
 
-            # Calculate probe loss
-            probe_optimizer.zero_grad()
-            with autocast(device.type, enabled=use_amp, dtype=dtype):
-                xy_loss = xy_prober(
-                    observations=x[:, :, :1],
-                    targets=loc[:, :, :1],
-                )
-                xy_loss = loader.dataset.normalizer.unnormalize_mse(xy_loss)
-                total_loss += xy_loss
+            # Calculate probe loss (only for environments with location data, e.g., Two Rooms)
+            if loc is not None:
+                probe_optimizer.zero_grad()
+                with autocast(device.type, enabled=use_amp, dtype=dtype):
+                    xy_loss = xy_prober(
+                        observations=x[:, :, :1],
+                        targets=loc[:, :, :1],
+                    )
+                    xy_loss = loader.dataset.normalizer.unnormalize_mse(xy_loss)
+                    total_loss += xy_loss
 
-            scaler.scale(xy_loss).backward()
-            scaler.step(probe_optimizer)
-            scaler.update()
-            probe_scheduler.step()
+                scaler.scale(xy_loss).backward()
+                scaler.step(probe_optimizer)
+                scaler.update()
+                probe_scheduler.step()
+            else:
+                # No probe loss for environments without locations (e.g., ATARI)
+                xy_loss = torch.tensor(0.0, device=device)
 
             # Update progress bar
             pbar.set_postfix(

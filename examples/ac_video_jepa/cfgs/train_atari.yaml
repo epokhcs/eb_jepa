@@ -1,67 +1,66 @@
 # ATARI Breakout Training Configuration for ac_video_jepa
 
+logging:
+  log_wandb: false
+  wandb_group:
+  wandb_sweep:
+  log_every: 10
+  exp_suffix: atari
+  save_every_n_epochs: 1
+  tqdm_silent: false
+
 meta:
-  model_folder: null
-  eval_only_mode: false
-  num_eval_episodes: 20
+  model_folder:
+  load_model: true
+  enable_plan_eval: true
+  eval_every_itr: -1
+  light_eval_freq: 50
+  seed: 1
 
 data:
   env_name: atari
   game_name: Breakout
-  dobs: 1  # Grayscale
-  img_size: 84
   batch_size: 32
   size: 10000
   val_size: 1000
-  n_steps: 200
-  sample_length: 17
-  normalize: true
   num_workers: 0
   pin_mem: false
   persistent_workers: false
 
-model:
-  encoder: impala
-  predictor: rnn
-  action_embedding_dim: 64  # Embedding dimension for discrete actions
-  dobs: 1
-  henc: 256
-  dstc: 256
-  dlat_out: 512
+training:
+  use_amp: true
+  dtype: bfloat16
 
-loss:
-  pred_coeff: 1.0
-  var_coeff: 16.0
-  cov_coeff: 8.0
-  sim_coeff: 12.0
-  idm_coeff: 1.0
+model:
+  compile: true
+  dobs: 1  # Grayscale
+  henc: 256
+  hpre: 256
+  dstc: 256
+  nsteps: 8
+  encoder_architecture: impala  # impala | resnet | conv
+  train_rollout: last  # last | all
+  encoder_skip_connections: true
+  predictor_skip_connections: true
+  action_embedding_dim: 64  # Embedding dimension for discrete actions
+  regularizer:
+    cov_coeff: 8
+    std_coeff: 16
+    sim_coeff_t: 12
+    idm_coeff: 1
+    first_t_only: false
+    spatial_as_samples: false
+    use_proj: false
+    idm_after_proj: false
+    sim_t_after_proj: false
 
 optim:
-  optimizer: adamw
-  lr: 1e-4
-  weight_decay: 1e-5
   epochs: 500
-  warmup_epochs: 10
-  eval_freq: 10
+  lr: 0.0001
+  grad_clip_enc: 2.0
+  grad_clip_pred: 2.0
+  weight_decay: 1.e-5
 
-logging:
-  use_wandb: false
-  project_name: ac_video_jepa_atari
-  log_freq: 100
-
-# Environment configuration for evaluation
-env:
-  normalize: true
-  grayscale: true
-  frame_skip: 4
-
-# Planning configuration (for evaluation)
-planning:
-  planner: cem
-  n_iters: 30
-  num_samples: 300
-  plan_length: 15
-  var_scale: 1.0
-  num_elites: 10
-  action_type: discrete  # CRITICAL: Set to discrete for ATARI
-  # num_actions will be automatically determined from environment
+eval:
+  plan_cfg_path: examples/ac_video_jepa/cfgs/planning_mppi.yaml
+  eval_cfg_path: examples/ac_video_jepa/cfgs/eval.yaml

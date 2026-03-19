@@ -30,7 +30,7 @@ class AtariConfig(DatasetConfigBase):
 
     # Environment settings
     normalize: bool = True
-    device: str = "cuda"
+    device: Optional[str] = None  # None for auto-detect (CPU/CUDA), or specify "cpu"/"cuda"
     train: bool = True
 
     # Evaluation settings
