@@ -443,3 +443,36 @@ class BCS(nn.Module):
         invariance_loss = F.mse_loss(z1, z2).mean()
         total_loss = invariance_loss + self.lmbd * bcs
         return {"loss": total_loss, "bcs_loss": bcs, "invariance_loss": invariance_loss}
+
+
+class RewardPredictionLoss(nn.Module):
+    """
+    MSE loss for reward prediction.
+
+    Predicts the immediate reward r_t from the latent state at time t.
+    """
+
+    def __init__(self, reward_head: nn.Module):
+        """
+        Args:
+            reward_head: RewardPredictionHead module
+        """
+        super().__init__()
+        self.reward_head = reward_head
+
+    def forward(self, predicted_latents: torch.Tensor, target_rewards: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            predicted_latents: Predicted latent states, shape [B, D, T, H, W]
+            target_rewards: Ground truth rewards, shape [B, T]
+
+        Returns:
+            loss: MSE between predicted and target rewards
+        """
+        # Predict rewards from latent states
+        predicted_rewards = self.reward_head(predicted_latents)  # [B, T]
+
+        # Compute MSE loss
+        loss = F.mse_loss(predicted_rewards, target_rewards)
+
+        return loss

@@ -35,9 +35,10 @@ dependencies = [
     "submitit",
     "tqdm",
     "pymunk",
-    "decord",
+    "decord; sys_platform != 'darwin'",
     "omegaconf",
     "ruamel.yaml",
+    "ale-py>=0.11.2",
 ]
 requires-python = "==3.12.*"
 

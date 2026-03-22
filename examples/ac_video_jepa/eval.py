@@ -48,6 +48,13 @@ def launch_plan_eval(
         loader=loader,
         prober=prober,
     )
+
+    # Handle empty results (when eval is skipped for unsupported environments)
+    if not eval_results:
+        logger.info("   Planning evaluation skipped (environment not compatible)")
+        jepa.train()
+        return {}
+
     logger.info(
         f"   success_rate={eval_results['success_rate']:.2f} | mean_dist={eval_results['mean_state_dist']:.4f}"
     )

@@ -577,3 +577,80 @@ class DiscreteInverseDynamicsModel(nn.Module):
         """
         combined_states = torch.cat([state_t, state_t_plus_1], dim=1)
         return self.model(combined_states)
+
+
+class RewardPredictionHead(nn.Module):
+    """
+    Predicts scalar reward from latent state representation.
+
+    For ATARI games, predicts the reward signal (score change) from
+    the current latent state representation.
+    """
+
+    def __init__(self, state_dim: int, hidden_dim: int = 256, spatial_aggregate: str = "mean"):
+        """
+        Args:
+            state_dim: Dimension of state representation (channels)
+            hidden_dim: Hidden layer dimension
+            spatial_aggregate: How to aggregate spatial dimensions ("mean", "max", "flatten")
+        """
+        super().__init__()
+        self.spatial_aggregate = spatial_aggregate
+
+        if spatial_aggregate == "flatten":
+            # Assumes fixed spatial size (e.g., 6x6 for ATARI latents)
+            input_dim = state_dim * 36  # 6*6
+        else:
+            input_dim = state_dim
+
+        self.model = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, 1),  # Output scalar reward
+        )
+        self.apply(init_module_weights)
+
+    def forward(self, latent_states: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            latent_states: Latent state representation
+                Shape: [B, D, T, H, W] for sequence
+                   or: [B, D, H, W] for single state
+
+        Returns:
+            predicted_rewards: Predicted reward values
+                Shape: [B, T] for sequence
+                   or: [B] for single state
+        """
+        # Handle both sequence and single state inputs
+        if latent_states.ndim == 5:  # [B, D, T, H, W]
+            B, D, T, H, W = latent_states.shape
+            # Permute to [B, T, D, H, W] then flatten batch and time
+            latent_states = latent_states.permute(0, 2, 1, 3, 4).flatten(0, 1)  # [B*T, D, H, W]
+            is_sequence = True
+        elif latent_states.ndim == 4:  # [B, D, H, W]
+            B = latent_states.shape[0]
+            is_sequence = False
+        else:
+            raise ValueError(f"Expected 4D or 5D input, got {latent_states.ndim}D")
+
+        # Spatial aggregation
+        if self.spatial_aggregate == "mean":
+            x = latent_states.mean(dim=(-2, -1))  # [B*T, D] or [B, D]
+        elif self.spatial_aggregate == "max":
+            x = latent_states.flatten(-2, -1).max(dim=-1)[0]  # [B*T, D] or [B, D]
+        elif self.spatial_aggregate == "flatten":
+            x = latent_states.flatten(-3, -1)  # [B*T, D*H*W] or [B, D*H*W]
+        else:
+            raise ValueError(f"Unknown spatial_aggregate: {self.spatial_aggregate}")
+
+        # Predict reward
+        rewards = self.model(x).squeeze(-1)  # [B*T] or [B]
+
+        # Reshape sequence outputs
+        if is_sequence:
+            rewards = rewards.view(B, T)  # [B, T]
+
+        return rewards

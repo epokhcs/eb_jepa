@@ -1,0 +1,23 @@
+# Component Architecture Diagram
+
+Detailed breakdown of all components with dimensions and data flow.
+
+See [workflow.txt](workflow.txt) for complete training/evaluation workflow.
+
+## Component Overview
+
+```
+JEPA WORLD MODEL FOR ATARI
+23.1M parameters total
+~260MB checkpoint
+
+├── Encoder (ImpalaEncoder) - 21.2M params (92.2%)
+├── Predictor (RNNPredictor) - 889K params (3.9%)
+├── IDM (DiscreteIDM) - 525K params (2.3%)
+├── Reward Head - 200K params (0.9%)
+└── Action Embeddings - 256 params (<0.01%)
+```
+
+## Data Flow
+
+See [../ARCHITECTURE.md](../ARCHITECTURE.md) for complete architectural details.

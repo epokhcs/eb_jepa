@@ -61,7 +61,25 @@ def main_unroll_eval(
         range(num_samples), desc="Evaluating unroll", disable=cfg.logging.tqdm_silent
     ):
         try:
-            x, a, loc, wall_x, door_y = next(loader_iter)
+            batch = next(loader_iter)
+            # Handle TrajectoryBatch format
+            if isinstance(batch, tuple) and hasattr(batch, '_fields'):
+                # TrajectoryBatch namedtuple with (states, actions, metadata)
+                x = batch.states
+                a = batch.actions
+                # Extract environment-specific metadata if available
+                if 'locations' in batch.metadata:
+                    loc = batch.metadata['locations']
+                    wall_x = batch.metadata.get('wall_x', None)
+                    door_y = batch.metadata.get('door_y', None)
+                else:
+                    # ATARI or other environments without location metadata
+                    loc = None
+                    wall_x = None
+                    door_y = None
+            else:
+                # Legacy format: 5 separate values (Two Rooms old format)
+                x, a, loc, wall_x, door_y = batch
         except StopIteration:
             logger.warning(
                 f"Loader exhausted after {idx} samples (requested {num_samples})"
@@ -97,7 +115,8 @@ def main_unroll_eval(
             )  # B T
             mse_values.append(latent_mse)
 
-            if prober:
+            # Only evaluate with prober if we have location metadata (Two Rooms)
+            if prober and loc is not None and wall_x is not None and door_y is not None:
                 gt_decoded = agent.decode_loc_to_pixel(gt_encoded, wall_x, door_y)
                 pred_decoded = agent.decode_loc_to_pixel(
                     predicted_states, wall_x, door_y
@@ -209,9 +228,26 @@ def main_eval(
             # env.set_goal(goal_img) # Set goal in the environment
         elif plan_cfg.task_specification.goal_source == "random_state":
             obs, info = env.reset()  # [C, H, W] uint8 tensor
-            obs, reward, done, truncated, info = env.step(
-                np.zeros(env.action_space.shape[0])
-            )  # step with zero action to get the first observation
+
+            # Handle both continuous and discrete action spaces
+            if hasattr(env.action_space, 'shape') and env.action_space.shape:
+                # Continuous action space (Two Rooms) - shape is non-empty tuple
+                zero_action = np.zeros(env.action_space.shape[0])
+            else:
+                # Discrete action space (ATARI) - use action 0 (typically NOOP)
+                zero_action = 0
+
+            obs, reward, done, truncated, info = env.step(zero_action)
+
+            # Check if environment supports goal-based planning (Two Rooms specific)
+            if "target_obs" not in info or "target_position" not in info:
+                logger.warning(
+                    "Planning evaluation not supported for this environment "
+                    "(missing 'target_obs' or 'target_position' in info dict). "
+                    "Skipping planning eval."
+                )
+                return {}
+
             goal_img = info["target_obs"]  # [C, H, W] uint8 tensor
 
         combined = torch.stack([obs, goal_img], dim=0)

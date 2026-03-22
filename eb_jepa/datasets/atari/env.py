@@ -37,9 +37,15 @@ class AtariEnv(EnvBase):
         Args:
             config: AtariConfig with game settings
             render_mode: Rendering mode for gymnasium
-            **kwargs: Additional environment arguments
+            **kwargs: Additional environment arguments (Two Rooms specific args are filtered out)
         """
         self.config = config
+
+        # Filter out Two Rooms specific kwargs that gymnasium doesn't understand
+        atari_kwargs = {}
+        for key, value in kwargs.items():
+            if key not in ['n_allowed_steps', 'level', 'wall_x', 'door_y']:
+                atari_kwargs[key] = value
 
         # Create base ATARI environment
         try:
@@ -47,7 +53,7 @@ class AtariEnv(EnvBase):
                 f"ALE/{config.game_name}-v5",
                 frameskip=config.frame_skip,
                 render_mode=render_mode,
-                **kwargs
+                **atari_kwargs
             )
         except Exception as e:
             raise RuntimeError(
@@ -172,6 +178,16 @@ class AtariEnv(EnvBase):
         obs = obs.to(self.device)
 
         return obs
+
+    @property
+    def action_space(self):
+        """Expose gymnasium action space for planning compatibility."""
+        return self.env.action_space
+
+    @property
+    def observation_space(self):
+        """Expose gymnasium observation space for compatibility."""
+        return self.env.observation_space
 
     def get_action_space_info(self) -> Dict[str, Any]:
         """Return action space information for ATARI."""

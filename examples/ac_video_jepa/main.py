@@ -40,6 +40,7 @@ from eb_jepa.training_utils import (
     setup_seed,
     setup_wandb,
 )
+from eb_jepa.metrics_logger import MetricsLogger, setup_wandb_from_env
 from examples.ac_video_jepa.eval import launch_plan_eval, launch_unroll_eval
 
 logger = get_logger(__name__)
@@ -90,19 +91,20 @@ def run(
     )
 
     # -- SETUP
-    setup_device("auto")
+    device = setup_device("auto")
     setup_seed(cfg.meta.seed)
 
-    # Device detection: CUDA > MPS > CPU
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    # -- METRICS LOGGER
+    metrics_logger = MetricsLogger(
+        log_dir=Path("logs/training"),
+        experiment_name=exp_name,
+        mode="training",
+    )
+    # Save config to logs
+    metrics_logger.save_config(OmegaConf.to_container(cfg, resolve=True))
 
-    # -- WANDB
-    wandb_run = setup_wandb(
+    # -- WANDB (with .env auto-detection)
+    wandb_run = setup_wandb_from_env(
         project="eb_jepa",
         config={
             "example": "ac_video_jepa",
@@ -112,8 +114,6 @@ def run(
         run_name=exp_name,
         tags=[f"seed_{cfg.meta.seed}", "ac_video_jepa"],
         group=cfg.logging.get("wandb_group"),
-        enabled=cfg.logging.get("log_wandb", False),
-        sweep_id=cfg.logging.get("wandb_sweep_id"),
     )
 
     log_data_info(
@@ -128,7 +128,12 @@ def run(
     dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16}
     dtype = dtype_map.get(cfg.training.get("dtype", "float16").lower(), torch.float16)
     use_amp = cfg.training.get("use_amp", True)
-    scaler = GradScaler(device.type, enabled=use_amp)
+    # MPS doesn't support GradScaler, disable it for MPS devices
+    if device.type == "mps":
+        scaler = GradScaler(device.type, enabled=False)
+        logger.info("MPS device detected, GradScaler disabled (using manual casting)")
+    else:
+        scaler = GradScaler(device.type, enabled=use_amp)
     logger.info(f"Using AMP with {dtype=}" if use_amp else f"AMP disabled")
 
     # -- ENV (for plan/unroll eval)
@@ -255,6 +260,31 @@ def run(
         ).to(device)
         idm_loss_fn = InverseDynamicsLoss(idm)
         logger.info(f"Using continuous IDM: predicts {action_dim}D action vectors")
+
+    # Create reward prediction head (optional, for ATARI games)
+    reward_head = None
+    reward_loss_fn = None
+    reward_optimizer = None
+    if cfg.model.get("reward_prediction", False):
+        from eb_jepa.architectures import RewardPredictionHead
+        from eb_jepa.losses import RewardPredictionLoss
+
+        # Get latent dimension from encoder output
+        state_dim = f  # Feature dimension from encoder
+
+        reward_head = RewardPredictionHead(
+            state_dim=state_dim,
+            hidden_dim=cfg.model.get("reward_head_hidden_dim", 256),
+            spatial_aggregate="mean",
+        ).to(device)
+
+        reward_loss_fn = RewardPredictionLoss(reward_head)
+        reward_optimizer = torch.optim.AdamW(
+            reward_head.parameters(),
+            lr=cfg.optim.lr,
+            weight_decay=cfg.optim.weight_decay,
+        )
+        logger.info(f"Reward prediction head enabled (state_dim={state_dim})")
 
     # Create regularizer with pre-wrapped IDM loss
     # We pass idm=None and manually set idm_loss_fn to use the correct loss type
@@ -442,12 +472,44 @@ def run(
                 # No probe loss for environments without locations (e.g., ATARI)
                 xy_loss = torch.tensor(0.0, device=device)
 
+            # Calculate reward prediction loss (if enabled)
+            if reward_head is not None and hasattr(batch, 'metadata') and 'rewards' in batch.metadata:
+                reward_optimizer.zero_grad()
+                with autocast(device.type, enabled=use_amp, dtype=dtype):
+                    # Get predicted latents from JEPA unroll
+                    with torch.no_grad():
+                        predicted_latents, _ = jepa.unroll(
+                            x,
+                            a,
+                            nsteps=cfg.model.nsteps,
+                            unroll_mode="autoregressive",
+                            ctxt_window_time=1,
+                            compute_loss=False,
+                            return_all_steps=False,
+                        )
+
+                    # Predict rewards
+                    target_rewards = batch.metadata['rewards'].to(device)  # [B, T]
+                    # Trim to match predicted length
+                    target_rewards = target_rewards[:, :predicted_latents.shape[2]]
+
+                    reward_loss = reward_loss_fn(predicted_latents, target_rewards)
+                    reward_loss = reward_loss * cfg.model.get("reward_loss_coeff", 1.0)
+                    total_loss += reward_loss
+
+                scaler.scale(reward_loss).backward()
+                scaler.step(reward_optimizer)
+                scaler.update()
+            else:
+                reward_loss = torch.tensor(0.0, device=device)
+
             # Update progress bar
             pbar.set_postfix(
                 {
                     "loss": f"{total_loss.item():.4f}",
                     "reg": f"{regl.item():.4f}",
                     "pred": f"{pl.item():.4f}",
+                    "rew": f"{reward_loss.item():.4f}" if reward_head is not None else "0.0",
                 }
             )
 
@@ -459,16 +521,39 @@ def run(
                     "train/reg_loss_unweight": regl_unweight.item(),
                     "train/pred_loss": pl.item(),
                     "train/probe_loss": xy_loss.item(),
+                    "train/reward_loss": reward_loss.item() if reward_head is not None else 0.0,
                     "global_step": global_step,
                     "epoch": epoch,
                     "itr_time": itr_time,
                     "optim/jepa_lr": jepa_optimizer.param_groups[0]["lr"],
                     "optim/probe_lr": probe_optimizer.param_groups[0]["lr"],
                 }
+                if reward_head is not None:
+                    log_data["optim/reward_lr"] = reward_optimizer.param_groups[0]["lr"]
                 for loss_name, loss_value in regldict.items():
                     log_data[f"train/regl/{loss_name}"] = loss_value
 
-                if cfg.logging.get("log_wandb"):
+                # Log to metrics logger
+                metrics_dict = {
+                    "total_loss": total_loss.item(),
+                    "reg_loss": regl.item(),
+                    "pred_loss": pl.item(),
+                    "probe_loss": xy_loss.item(),
+                    "jepa_lr": jepa_optimizer.param_groups[0]["lr"],
+                    "probe_lr": probe_optimizer.param_groups[0]["lr"],
+                    "itr_time": itr_time,
+                }
+                if reward_head is not None:
+                    metrics_dict["reward_loss"] = reward_loss.item()
+                    metrics_dict["reward_lr"] = reward_optimizer.param_groups[0]["lr"]
+
+                metrics_logger.log_metrics(
+                    epoch=epoch,
+                    step=global_step,
+                    metrics=metrics_dict,
+                )
+
+                if cfg.logging.get("log_wandb") and wandb_run is not None:
                     wandb.log(log_data, step=global_step)
 
             # Planning eval (only if eval is enabled)
@@ -516,7 +601,19 @@ def run(
 
         epoch_time = time() - epoch_start_time
 
-        # Log epoch summary
+        # Log epoch summary to metrics logger
+        metrics_logger.log_epoch_summary(
+            epoch=epoch,
+            metrics={
+                "total_loss": total_loss.item(),
+                "reg_loss": regl.item(),
+                "pred_loss": pl.item(),
+                "probe_loss": xy_loss.item(),
+            },
+            elapsed_time=epoch_time,
+        )
+
+        # Log epoch summary to console
         log_epoch(
             epoch,
             {
@@ -529,7 +626,7 @@ def run(
             elapsed_time=epoch_time,
         )
 
-        if cfg.logging.get("log_wandb"):
+        if cfg.logging.get("log_wandb") and wandb_run is not None:
             wandb.log(
                 {"epoch": epoch, "epoch_time": epoch_time},
                 step=epoch * len(loader),
@@ -546,6 +643,8 @@ def run(
             xy_head_state_dict=xy_head.state_dict(),
             probe_optimizer_state_dict=probe_optimizer.state_dict(),
             probe_scheduler_state_dict=probe_scheduler.state_dict(),
+            reward_head_state_dict=reward_head.state_dict() if reward_head is not None else None,
+            reward_optimizer_state_dict=reward_optimizer.state_dict() if reward_optimizer is not None else None,
         )
         if epoch % cfg.logging.save_every_n_epochs == 0:
             save_checkpoint(
@@ -558,7 +657,13 @@ def run(
                 xy_head_state_dict=xy_head.state_dict(),
                 probe_optimizer_state_dict=probe_optimizer.state_dict(),
                 probe_scheduler_state_dict=probe_scheduler.state_dict(),
+                reward_head_state_dict=reward_head.state_dict() if reward_head is not None else None,
+                reward_optimizer_state_dict=reward_optimizer.state_dict() if reward_optimizer is not None else None,
             )
+
+    # Close metrics logger
+    metrics_logger.close()
+    logger.info("✅ Training complete!")
 
 
 if __name__ == "__main__":

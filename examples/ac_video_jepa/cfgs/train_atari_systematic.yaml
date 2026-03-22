@@ -1,11 +1,12 @@
-# ATARI Breakout Training Configuration for ac_video_jepa
+# ATARI Breakout Training Configuration with Systematic Paddle Sweep Dataset
+# This configuration uses pre-collected trajectories with systematic paddle position variation
 
 logging:
   log_wandb: true
   wandb_group:
   wandb_sweep:
   log_every: 10
-  exp_suffix: atari
+  exp_suffix: atari_systematic
   save_every_n_epochs: 1
   tqdm_silent: false
 
@@ -21,13 +22,14 @@ data:
   env_name: atari
   game_name: Breakout
   batch_size: 32
-  size: 10000
-  val_size: 1000
+  size: 60  # Number of trajectories in systematic sweep dataset
+  val_size: 12  # 20% for validation
   num_workers: 0
   pin_mem: false
   persistent_workers: false
-  # Use tracking policy dataset
-  dataset_path: data/systematic_sweep/breakout_systematic_paddle_sweep.pkl
+  # Systematic dataset settings
+  use_systematic_dataset: true
+  systematic_dataset_path: data/systematic_sweep/breakout_systematic_paddle_sweep.pkl
 
 training:
   use_amp: true
@@ -44,7 +46,7 @@ model:
   train_rollout: last  # last | all
   encoder_skip_connections: true
   predictor_skip_connections: true
-  action_embedding_dim: 32  # Embedding dimension for discrete actions (reduced from 64)
+  action_embedding_dim: 64  # Embedding dimension for discrete actions
   # Reward prediction settings
   reward_prediction: true  # Enable reward prediction head
   reward_head_hidden_dim: 256  # Hidden dimension for reward head
@@ -61,7 +63,7 @@ model:
     sim_t_after_proj: false
 
 optim:
-  epochs: 5
+  epochs: 10  # More epochs since we have better data coverage
   lr: 0.0001
   grad_clip_enc: 2.0
   grad_clip_pred: 2.0

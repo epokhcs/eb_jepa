@@ -55,8 +55,22 @@ def init_data(env_name, cfg_data=None, **kwargs):
     pin_mem = merged_cfg.get("pin_mem", False)
     persistent_workers = merged_cfg.get("persistent_workers", False) and num_workers > 0
 
-    # Create dataset using registry
-    dset = EnvironmentRegistry.create_dataset(env_name, config)
+    # Create dataset using registry or systematic dataset if specified
+    if merged_cfg.get("use_systematic_dataset", False) and env_name == "atari":
+        # Use SystematicAtariDataset for better trajectory coverage
+        from eb_jepa.datasets.atari.systematic_dataset import SystematicAtariDataset
+
+        dataset_path = merged_cfg.get("systematic_dataset_path")
+        if dataset_path is None:
+            raise ValueError("systematic_dataset_path must be specified when use_systematic_dataset=True")
+
+        dset = SystematicAtariDataset(config, dataset_path)
+        val_dset = SystematicAtariDataset(config, dataset_path)
+    else:
+        # Use standard dataset from registry
+        dset = EnvironmentRegistry.create_dataset(env_name, config)
+        val_dset = EnvironmentRegistry.create_dataset(env_name, config)
+
     loader = torch.utils.data.DataLoader(
         dset,
         batch_size=config.batch_size,
@@ -67,8 +81,7 @@ def init_data(env_name, cfg_data=None, **kwargs):
         persistent_workers=persistent_workers,
     )
 
-    # Create validation dataset
-    val_dset = EnvironmentRegistry.create_dataset(env_name, config)
+    # Create validation dataloader
     val_loader = torch.utils.data.DataLoader(
         val_dset,
         batch_size=4,

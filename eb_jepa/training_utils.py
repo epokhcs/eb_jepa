@@ -16,9 +16,15 @@ logger = get_logger(__name__)
 
 
 def setup_device(device: str = "auto") -> torch.device:
-    """Set up the compute device. Options: 'auto', 'cuda', or 'cpu'."""
+    """Set up the compute device. Options: 'auto', 'cuda', 'mps', or 'cpu'."""
     if device == "auto":
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Auto-detect: CUDA > MPS > CPU
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     device = torch.device(device)
     logger.info(f"Using device: {device}")
     return device
