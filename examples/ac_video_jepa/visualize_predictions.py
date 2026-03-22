@@ -25,39 +25,21 @@ from eb_jepa.datasets.utils import init_data
 from eb_jepa.jepa import JEPA
 from eb_jepa.logging import get_logger
 from eb_jepa.training_utils import setup_device
+from eb_jepa.checkpoint_utils import load_jepa_from_checkpoint
 
 logger = get_logger(__name__)
 
 
 def load_model_and_data(checkpoint_path: str, config_path: str):
     """Load trained model and validation data."""
-    logger.info(f"Loading config from: {config_path}")
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
+    # Load model using utility
+    jepa, cfg, data_config = load_jepa_from_checkpoint(checkpoint_path, config_path, device='auto')
+    device = next(jepa.parameters()).device
 
-    # Convert to namespace
-    from argparse import Namespace
-    def dict_to_namespace(d):
-        if isinstance(d, dict):
-            return Namespace(**{k: dict_to_namespace(v) for k, v in d.items()})
-        return d
-    cfg = dict_to_namespace(cfg)
-
-    # Setup device
-    device = setup_device("auto")
-
-    # Load data
+    # Load validation data
     logger.info("Loading validation data...")
-    train_loader, val_loader = init_data(cfg.data.env_name, cfg.data)
-
-    # Load checkpoint
-    logger.info(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-
-    # Get model from checkpoint
-    jepa = checkpoint['model']
-    jepa.to(device)
-    jepa.eval()
+    cfg_data_dict = vars(cfg.data)
+    train_loader, val_loader, _ = init_data(cfg.data.env_name, cfg_data_dict)
 
     return jepa, val_loader, device, cfg
 
