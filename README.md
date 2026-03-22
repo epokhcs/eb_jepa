@@ -88,8 +88,13 @@ python examples/ac_video_jepa/main.py --fname examples/ac_video_jepa/cfgs/train_
 - Reward prediction head for goal-directed planning
 - MPPI/CEM planning algorithms
 - Comprehensive evaluation tools
+- **Human gameplay dataset** for validation and benchmarking (117 hours, 8M actions, eye-tracking data)
 
 **[→ See full ATARI documentation](docs/atari/README.md)**
+
+**Datasets:**
+- **Synthetic**: Systematic paddle sweep with tracking policy (608 unique positions, 4.3x coverage vs static)
+- **Human**: [ATARI-HEAD dataset](data/human/USAGE.md) with expert demonstrations and eye-tracking (126 MB for Breakout)
 
 ---
 
