@@ -2,6 +2,8 @@
 
 import torch.nn as nn
 from einops import rearrange
+import torch
+import numpy as np
 
 
 def init_module_weights(m, std: float = 0.02):
@@ -68,3 +70,59 @@ class TemporalBatchMixin:
             return out
         else:
             return self._forward(x)
+
+
+def to_model_obs(obs, device=None):
+    """
+    Convert a numpy array or tensor observation to model input shape [B, C, T, H, W] and device.
+    Accepts [H, W], [C, H, W], [B, C, H, W], or [B, C, T, H, W].
+    Adds batch/time dims as needed.
+    """
+    if isinstance(obs, np.ndarray):
+        obs = torch.from_numpy(obs).float()
+    if obs.ndim == 2:
+        obs = obs.unsqueeze(0)  # [1, H, W]
+    if obs.ndim == 3:
+        if obs.shape[-1] in [1, 3]:
+            obs = obs.permute(2, 0, 1)  # [C, H, W]
+        obs = obs.unsqueeze(0)  # [1, C, H, W]
+    if obs.ndim == 4:
+        obs = obs.unsqueeze(2)  # [B, C, 1, H, W]
+    assert obs.ndim == 5, f"Expected obs to have 5 dims, got {obs.shape}"
+    if device is not None:
+        obs = obs.to(device)
+    return obs
+
+
+def to_model_actions(actions, device=None):
+    """
+    Convert a numpy array or tensor of actions to model input shape [B, 1, T] and device.
+    Accepts [T], [1, T], or [B, 1, T].
+    """
+    if isinstance(actions, np.ndarray):
+        actions = torch.from_numpy(actions)
+    # Debug: print and assert for negative actions
+    print("[to_model_actions] actions (pre-shape):", actions)
+    if (actions < 0).any():
+        print("[to_model_actions] WARNING: Negative actions found!", actions)
+    assert (actions >= 0).all(), f"[to_model_actions] Negative action index found: {actions}"
+    if actions.ndim == 1:
+        actions = actions.unsqueeze(0).unsqueeze(0)  # [1, 1, T]
+    elif actions.ndim == 2:
+        actions = actions.unsqueeze(0)  # [1, 1, T] if [1, T]
+    assert actions.ndim == 3, f"Expected actions to have 3 dims, got {actions.shape}"
+    actions = actions.to(torch.long)
+    if device is not None:
+        actions = actions.to(device)
+    return actions
+
+
+def to_numpy_cpu(tensor):
+    """
+    Move tensor to CPU and convert to numpy array.
+    """
+    if hasattr(tensor, "cpu"):
+        tensor = tensor.cpu()
+    if hasattr(tensor, "numpy"):
+        return tensor.numpy()
+    return tensor

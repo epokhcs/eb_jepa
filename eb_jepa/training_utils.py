@@ -163,10 +163,24 @@ def save_checkpoint(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+
+    # Try to get model config if available
+    model_config = getattr(model, 'config', None)
+    if model_config is not None and hasattr(model_config, 'to_dict'):
+        model_config = model_config.to_dict()
+    elif hasattr(model_config, '__dict__'):
+        model_config = vars(model_config)
+
+    # Remove _orig_mod. prefix from state_dict keys for compatibility
+    state_dict = model.state_dict()
+    state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     checkpoint = {
         "epoch": epoch,
         "step": step,
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": state_dict,
+        "model_class": model.__class__.__name__,
+        "model_config": model_config,
+        "code_version": "v0.1.1",  # TODO: Replace with git hash or dynamic version
     }
 
     if optimizer is not None:
@@ -205,6 +219,28 @@ def load_checkpoint(
     map_location = device if device else "cpu"
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
 
+    # Check model class
+    ckpt_class = checkpoint.get("model_class", None)
+    model_class = model.__class__.__name__
+    if ckpt_class and ckpt_class != model_class:
+        logger.warning(f"Checkpoint model class ({ckpt_class}) does not match current model ({model_class})!")
+        if strict:
+            raise ValueError(f"Model class mismatch: {ckpt_class} vs {model_class}")
+
+    # Check model config if available
+    ckpt_config = checkpoint.get("model_config", None)
+    model_config = getattr(model, 'config', None)
+    if ckpt_config and model_config is not None:
+        # Compare as dicts
+        if hasattr(model_config, 'to_dict'):
+            model_config = model_config.to_dict()
+        elif hasattr(model_config, '__dict__'):
+            model_config = vars(model_config)
+        if ckpt_config != model_config:
+            logger.warning("Checkpoint model config does not match current model config!")
+            if strict:
+                raise ValueError("Model config mismatch between checkpoint and current model.")
+
     # Handle compiled model state dicts
     state_dict = checkpoint.get("model_state_dict", {})
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
@@ -239,6 +275,9 @@ def load_checkpoint(
                 "scaler_state_dict",
                 "epoch",
                 "step",
+                "model_class",
+                "model_config",
+                "code_version",
             ]
         },
     }

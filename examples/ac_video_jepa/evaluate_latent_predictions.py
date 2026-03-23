@@ -27,8 +27,18 @@ from eb_jepa.checkpoint_utils import load_jepa_from_checkpoint
 from eb_jepa.datasets.registry import EnvironmentRegistry
 from eb_jepa.datasets.atari.config import AtariConfig
 from eb_jepa.logging import get_logger
+from eb_jepa.nn_utils import to_model_obs, to_model_actions
 
 logger = get_logger(__name__)
+
+
+def has_ocatari_objects(env):
+    """Return True if env or env.unwrapped has OCAtari objects attribute."""
+    if hasattr(env, 'objects'):
+        return True
+    if hasattr(env, 'unwrapped') and hasattr(env.unwrapped, 'objects'):
+        return True
+    return False
 
 
 def record_gameplay_trajectories(env, policy='tracking', num_episodes=10, max_steps=200):
@@ -61,14 +71,19 @@ def record_gameplay_trajectories(env, policy='tracking', num_episodes=10, max_st
             if policy == 'random':
                 action = env.action_space.sample()
             elif policy == 'tracking':
-                # Track ball
+                # Track ball using OCAtari objects if available
                 paddle_x = None
                 ball_x = None
-                for obj in env.objects:
-                    if obj.category.lower() == "player":
-                        paddle_x = obj.x
-                    elif obj.category.lower() == "ball":
-                        ball_x = obj.x
+                if has_ocatari_objects(env):
+                    objects = env.objects if hasattr(env, 'objects') else env.unwrapped.objects
+                    for obj in objects:
+                        if obj.category.lower() == "player":
+                            paddle_x = obj.x
+                        elif obj.category.lower() == "ball":
+                            ball_x = obj.x
+                else:
+                    # OCAtari objects not available; fallback to static action
+                    action = 0
 
                 if paddle_x is not None and ball_x is not None:
                     if ball_x < paddle_x - 5:
@@ -77,8 +92,7 @@ def record_gameplay_trajectories(env, policy='tracking', num_episodes=10, max_st
                         action = 2  # RIGHT
                     else:
                         action = 0  # NOOP
-                else:
-                    action = 0
+                # else: action already set to 0 above
             else:
                 action = 0  # static
 
@@ -92,9 +106,17 @@ def record_gameplay_trajectories(env, policy='tracking', num_episodes=10, max_st
             obs = next_obs
             step += 1
 
+        # ...existing code...
+
+    # After each episode, append trajectory
+        frames_cpu = [f.cpu() if hasattr(f, 'cpu') else f for f in frames]
+        frames_arr = np.array(frames_cpu)
+        actions_arr = np.array(actions)
+        assert frames_arr.ndim in (4, 5), f"frames shape: {frames_arr.shape}"
+        assert actions_arr.ndim == 1, f"actions shape: {actions_arr.shape}"
         trajectories.append({
-            'frames': np.array(frames),  # [T+1, H, W] or [T+1, H, W, C]
-            'actions': np.array(actions),  # [T]
+            'frames': frames_arr,  # [T+1, H, W] or [T+1, H, W, C]
+            'actions': actions_arr,  # [T]
         })
 
     logger.info(f"Recorded {len(trajectories)} trajectories, avg length: {np.mean([len(t['actions']) for t in trajectories]):.1f}")
@@ -129,20 +151,32 @@ def evaluate_prediction_quality(
 
     # Collect samples (initial state + future trajectory)
     samples = []
+
     for traj in trajectories:
         frames = traj['frames']
         actions = traj['actions']
         T = len(actions)
 
         # Sample multiple starting points from this trajectory
-        for t0 in range(0, T - max_horizon, max_horizon // 2):
+        for t0 in range(0, T - max_horizon, max(1, max_horizon // 2)):
+            # Ensure indices do not go out of bounds
             if t0 + max_horizon >= T:
+                continue
+            if t0 + max_horizon + 1 > len(frames):
+                continue
+            if t0 + max_horizon > len(actions):
+                continue
+
+            # Defensive: check that future_frames and actions are long enough
+            future_frames = frames[t0+1:t0+max_horizon+1]
+            actions_slice = actions[t0:t0+max_horizon]
+            if len(future_frames) < max_horizon or len(actions_slice) < max_horizon:
                 continue
 
             samples.append({
                 'init_frame': frames[t0],
-                'future_frames': frames[t0+1:t0+max_horizon+1],
-                'actions': actions[t0:t0+max_horizon],
+                'future_frames': future_frames,
+                'actions': actions_slice,
             })
 
             if len(samples) >= num_samples:
@@ -157,25 +191,25 @@ def evaluate_prediction_quality(
     # Evaluate each sample
     cosine_similarities = {h: [] for h in prediction_horizons}
 
+
     with torch.no_grad():
-        for sample in tqdm(samples, desc="Evaluating samples"):
+        for sample_idx, sample in enumerate(tqdm(samples, desc="Evaluating samples")):
             init_frame = sample['init_frame']
             future_frames = sample['future_frames']
+
             actions = sample['actions']
-
-            # Prepare initial observation
-            obs_tensor = torch.from_numpy(init_frame).float()
-            if obs_tensor.ndim == 2:  # Grayscale [H, W]
-                obs_tensor = obs_tensor.unsqueeze(0)  # [1, H, W]
-            elif obs_tensor.ndim == 3 and obs_tensor.shape[-1] in [1, 3]:  # [H, W, C]
-                obs_tensor = obs_tensor.permute(2, 0, 1)  # [C, H, W]
-
-            obs_tensor = obs_tensor.unsqueeze(0).unsqueeze(2).to(device)  # [1, C, 1, H, W]
+            print("Raw actions:", actions)
+            # Filter or remap negative actions to 0 (NOOP)
+            if (np.array(actions) < 0).any():
+                print("Warning: Negative actions found, remapping to 0 (NOOP)")
+                actions = np.where(np.array(actions) < 0, 0, actions)
+            # Prepare initial observation and actions using utilities
+            obs_tensor = to_model_obs(init_frame, device)
             obs_tensor = normalizer.normalize_state(obs_tensor)
+            assert obs_tensor.ndim == 5, f"obs_tensor shape: {obs_tensor.shape}"
 
-            # Prepare actions
-            action_tensor = torch.from_numpy(actions).float()
-            action_tensor = action_tensor.unsqueeze(0).unsqueeze(0).to(device)  # [1, 1, T]
+            action_tensor = to_model_actions(actions, device)
+            assert action_tensor.ndim == 3, f"action_tensor shape: {action_tensor.shape}"
 
             # Predict future latent states
             predicted_latents = jepa.unroll(
@@ -186,6 +220,7 @@ def evaluate_prediction_quality(
                 ctxt_window_time=1,
                 compute_loss=False,
                 return_all_steps=False,
+                sample_idx=sample_idx,
             )[0]  # [1, D, T, H', W']
 
             # Encode actual future frames
@@ -204,15 +239,20 @@ def evaluate_prediction_quality(
             actual_frames_tensor = torch.cat(actual_frames_list, dim=2)  # [1, C, T, H, W]
 
             # Encode actual frames
-            B, C, T, H, W = actual_frames_tensor.shape
+            B, C, T_actual, H, W = actual_frames_tensor.shape
             actual_frames_flat = actual_frames_tensor.permute(0, 2, 1, 3, 4).flatten(0, 1).unsqueeze(2)  # [B*T, C, 1, H, W]
             actual_latents = jepa.encode(actual_frames_flat).squeeze(2)  # [B*T, D, H', W']
             D, H_lat, W_lat = actual_latents.shape[1:]
-            actual_latents = actual_latents.unflatten(0, (B, T)).permute(0, 2, 1, 3, 4)  # [1, D, T, H', W']
+            actual_latents = actual_latents.unflatten(0, (B, T_actual)).permute(0, 2, 1, 3, 4)  # [1, D, T, H', W']
 
-            # Compute cosine similarity for each horizon
+            # Defensive: check shapes before indexing
+            pred_T = predicted_latents.shape[2]
+            actual_T = actual_latents.shape[2]
             for h in prediction_horizons:
                 if h > len(actions):
+                    continue
+                if h-1 >= pred_T or h-1 >= actual_T:
+                    logger.warning(f"Skipping horizon {h}: h-1={h-1}, pred_T={pred_T}, actual_T={actual_T}")
                     continue
 
                 # Get latents at horizon h

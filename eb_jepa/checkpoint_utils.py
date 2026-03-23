@@ -134,29 +134,55 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
 
     # Build regularizer
     logger.info("Building regularizer...")
+    # Remove keys not accepted by VC_IDM_Sim_Regularizer
+    reg_args = vars(cfg.model.regularizer).copy()
+    reg_args.pop('use_proj', None)
     regularizer = VC_IDM_Sim_Regularizer(
-        idm_model=idm_model,
+        idm=idm_model,
         projector=projector,
-        **vars(cfg.model.regularizer)
+        **reg_args
     )
 
     # Build JEPA model
     logger.info("Building JEPA model...")
     jepa = JEPA(
         encoder=encoder,
-        action_encoder=aencoder,
+        aencoder=aencoder,
         predictor=predictor,
         regularizer=regularizer,
-        nsteps=cfg.model.nsteps,
-        train_rollout=cfg.model.train_rollout,
+        predcost=None  # or set appropriately if needed
     )
 
     # Load checkpoint
     logger.info(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    # Load model state
-    jepa.load_state_dict(checkpoint['model_state_dict'])
+    # Load model state, stripping _orig_mod. prefix if present
+    state_dict = checkpoint['model_state_dict']
+    # Remove _orig_mod. prefix if present
+    if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+    # Map aencoder.* keys to action_encoder.* for compatibility
+    mapped_state_dict = {}
+    for k, v in state_dict.items():
+        # Map aencoder.* to action_encoder.*
+        if k.startswith('aencoder.'):
+            mapped_state_dict['action_encoder.' + k[len('aencoder.'):]] = v
+        # Map predictor.action_encoder.embedding.weight to action_encoder.embedding.weight
+        elif k == 'predictor.action_encoder.embedding.weight':
+            mapped_state_dict['action_encoder.embedding.weight'] = v
+        # Map _orig_mod.predictor.action_encoder.embedding.weight to action_encoder.embedding.weight
+        elif k == '_orig_mod.predictor.action_encoder.embedding.weight':
+            mapped_state_dict['action_encoder.embedding.weight'] = v
+        else:
+            mapped_state_dict[k] = v
+    # If predictor.action_encoder.embedding.weight is missing but action_encoder.embedding.weight exists, copy it
+    if (
+        'predictor.action_encoder.embedding.weight' not in mapped_state_dict
+        and 'action_encoder.embedding.weight' in mapped_state_dict
+    ):
+        mapped_state_dict['predictor.action_encoder.embedding.weight'] = mapped_state_dict['action_encoder.embedding.weight']
+    jepa.load_state_dict(mapped_state_dict)
     jepa.to(device)
     jepa.eval()
 

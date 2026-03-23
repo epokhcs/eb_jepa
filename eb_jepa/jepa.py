@@ -65,6 +65,7 @@ class JEPA(JEPAbase):
         ctxt_window_time=1,
         compute_loss=True,
         return_all_steps=False,
+        **kwargs
     ):
         """Unified multi-step prediction with optional loss computation.
 
@@ -129,11 +130,15 @@ class JEPA(JEPAbase):
         else:
             rloss = rloss_unweight = rloss_dict = ploss = None
 
-        # Encode actions
-        if actions is not None:
-            actions_encoded = self.action_encoder(actions)
+
+        # In autoregressive mode, encode actions per step to avoid slicing embeddings
+        if unroll_mode == "autoregressive":
+            actions_encoded = None  # Will encode per step
         else:
-            actions_encoded = None
+            if actions is not None:
+                actions_encoded = self.action_encoder(actions)
+            else:
+                actions_encoded = None
 
         # Collect all steps if requested
         all_steps = [] if return_all_steps else None
@@ -159,24 +164,44 @@ class JEPA(JEPAbase):
         # Autoregressive mode: step-by-step with sliding window
         # Note: RNN predictors (is_rnn=True) are a special case with ctxt_window_time=1
         elif unroll_mode == "autoregressive":
-            if actions is not None and nsteps > actions.size(2):
-                raise ValueError(
-                    f"nsteps ({nsteps}) larger than action sequence length ({actions.size(2)})"
-                )
+            sample_idx = kwargs.get('sample_idx', None)
+            if actions is not None:
+                nsteps = min(nsteps, actions.size(2))
             # For RNN predictors, force ctxt_window_time=1
             effective_ctxt_window = 1 if self.single_unroll else ctxt_window_time
 
             predicted_states = state[:, :, :effective_ctxt_window]
             for i in range(nsteps):
-                # Take last ctxt_window_time states
-                context_states = predicted_states[:, :, -effective_ctxt_window:]
-                # Take corresponding actions
-                if actions_encoded is not None:
-                    context_actions = actions_encoded[
-                        :, :, max(0, i + 1 - effective_ctxt_window) : i + 1
-                    ]
+                # Defensive: break if action slice would be empty or out of bounds
+                if actions is not None:
+                    start_idx = max(0, i + 1 - effective_ctxt_window)
+                    end_idx = i + 1
+                    prefix = f"[JEPA.unroll] sample {sample_idx} step {i}: " if sample_idx is not None else f"[JEPA.unroll] step {i}: "
+                    print(f"{prefix}start_idx={start_idx}, end_idx={end_idx}, actions.shape={actions.shape}")
+                    if end_idx > actions.shape[2]:
+                        print(f"[JEPA.unroll] BREAK: end_idx {end_idx} > actions.shape[2] {actions.shape[2]} at step {i}")
+                        break
+                    action_slice = actions[:, :, start_idx:end_idx]
+                    print(f"{prefix}action_slice.shape={action_slice.shape}, dtype={action_slice.dtype}, values={action_slice.tolist()}")
+                    if action_slice.shape[-1] == 0:
+                        print(f"{prefix}SKIP: action_slice is empty")
+                        continue
+                    if action_slice.numel() < 32:
+                        print(f"{prefix}action_slice values: {action_slice.tolist()}")
+                    else:
+                        print(f"{prefix}action_slice values (truncated): {action_slice.flatten()[:32].tolist()} ...")
+                    assert action_slice.dtype in (torch.int64, torch.int32, torch.uint8, torch.long), f"action_slice dtype should be int, got {action_slice.dtype}"
+                    if (action_slice < 0).any():
+                        print(f"{prefix}WARNING: Negative action index in action_slice: {action_slice.tolist()}")
+                    assert (action_slice >= 0).all(), f"Negative action index in action_slice: {action_slice}"
+                    context_actions = self.action_encoder(action_slice)
                 else:
                     context_actions = None
+                # Take last ctxt_window_time states
+                context_states = predicted_states[:, :, -effective_ctxt_window:]
+                # Debug: print context_actions shape and dtype
+                if context_actions is not None:
+                    print("[JEPA.unroll] context_actions (embedding):", context_actions.shape, context_actions.dtype)
                 # Predict and take only last timestep
                 pred_step = self.predictor(context_states, context_actions)[:, :, -1:]
                 # Append prediction to sequence
