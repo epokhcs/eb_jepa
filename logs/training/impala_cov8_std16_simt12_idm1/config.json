@@ -1,0 +1,72 @@
+{
+  "logging": {
+    "log_wandb": true,
+    "wandb_group": null,
+    "wandb_sweep": null,
+    "log_every": 10,
+    "exp_suffix": "atari",
+    "save_every_n_epochs": 1,
+    "tqdm_silent": false
+  },
+  "meta": {
+    "model_folder": null,
+    "load_model": true,
+    "enable_plan_eval": false,
+    "eval_every_itr": -1,
+    "light_eval_freq": 50,
+    "seed": 1
+  },
+  "data": {
+    "env_name": "atari",
+    "game_name": "Breakout",
+    "batch_size": 32,
+    "size": 10000,
+    "val_size": 1000,
+    "num_workers": 0,
+    "pin_mem": false,
+    "persistent_workers": false,
+    "dataset_path": "data/systematic_sweep/breakout_systematic_paddle_sweep.pkl"
+  },
+  "training": {
+    "use_amp": true,
+    "dtype": "bfloat16"
+  },
+  "model": {
+    "compile": true,
+    "dobs": 1,
+    "henc": 256,
+    "hpre": 256,
+    "dstc": 256,
+    "nsteps": 8,
+    "encoder_architecture": "impala",
+    "train_rollout": "last",
+    "encoder_skip_connections": true,
+    "predictor_skip_connections": true,
+    "action_embedding_dim": 32,
+    "reward_prediction": true,
+    "reward_head_hidden_dim": 256,
+    "reward_loss_coeff": 1.0,
+    "regularizer": {
+      "cov_coeff": 8,
+      "std_coeff": 16,
+      "sim_coeff_t": 12,
+      "idm_coeff": 1,
+      "first_t_only": false,
+      "spatial_as_samples": false,
+      "use_proj": false,
+      "idm_after_proj": false,
+      "sim_t_after_proj": false
+    }
+  },
+  "optim": {
+    "epochs": 10,
+    "lr": 0.0001,
+    "grad_clip_enc": 2.0,
+    "grad_clip_pred": 2.0,
+    "weight_decay": 1e-05
+  },
+  "eval": {
+    "plan_cfg_path": "examples/ac_video_jepa/cfgs/planning_mppi.yaml",
+    "eval_cfg_path": "examples/ac_video_jepa/cfgs/eval.yaml"
+  }
+}
