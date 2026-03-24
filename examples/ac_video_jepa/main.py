@@ -342,6 +342,7 @@ def run(
         ckpt_info = load_checkpoint(
             checkpoint_path, jepa, jepa_optimizer, jepa_scheduler, device=device
         )
+        # Use the exact epoch from checkpoint, do not increment
         start_epoch = ckpt_info.get("epoch", 0)
         if "xy_head_state_dict" in ckpt_info:
             xy_head.load_state_dict(ckpt_info["xy_head_state_dict"])
@@ -387,6 +388,16 @@ def run(
         return eval_results
 
     # -- TRAINING LOOP
+    # Remove any old checkpoints if starting from scratch
+    if start_epoch == 0:
+        ckpt_dir = folder / "checkpoints"
+        if ckpt_dir.exists():
+            for f in ckpt_dir.glob("e-*.pth.tar"):
+                f.unlink()
+            latest_ckpt = ckpt_dir / "latest.pth.tar"
+            if latest_ckpt.exists():
+                latest_ckpt.unlink()
+
     for epoch in range(start_epoch, cfg.optim.epochs):
         epoch_start_time = time()
         pbar = tqdm(
