@@ -76,10 +76,10 @@ class DiscreteMPPIPlanner:
             best_actions: [1, 1, horizon] best action sequence
             all_costs: [num_samples] costs for each sample
         """
-        # Sample random action sequences
+        # Sample random action sequences (keep as long/int64 for discrete actions)
         action_samples = torch.randint(
             0, self.num_actions, (self.num_samples, 1, self.horizon), device=device
-        ).float()
+        )
 
         # Rollout each action sequence
         costs = []
@@ -227,81 +227,30 @@ def test_planning(checkpoint_path, planner_type="mppi", objective="latent_varian
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Episodes: {num_episodes}, Horizon: {horizon}")
 
-    # Setup device
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-    print(f"Device: {device}")
+    # Find config.yaml in the same directory as checkpoint
+    from pathlib import Path
+    checkpoint_dir = Path(checkpoint_path).parent
+    config_path = checkpoint_dir / "config.yaml"
 
-    # Load checkpoint
-    print("\nLoading checkpoint...")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found at {config_path}. Expected to find config.yaml in checkpoint directory.")
 
-    # Extract config from checkpoint
-    cfg = checkpoint.get('config', {})
-    if isinstance(cfg, dict):
-        # Convert dict to simple namespace for attribute access
-        class Config:
-            def __init__(self, d):
-                for k, v in d.items():
-                    if isinstance(v, dict):
-                        setattr(self, k, Config(v))
-                    else:
-                        setattr(self, k, v)
+    # Load JEPA model using checkpoint_utils
+    print("\nLoading JEPA model from checkpoint...")
+    from eb_jepa.checkpoint_utils import load_jepa_from_checkpoint
 
-        cfg = Config(cfg)
-
-    # Create JEPA model
-    print("Initializing JEPA model...")
-
-    # Action encoder
-    action_encoder = DiscreteActionEncoder(
-        num_actions=4,
-        embedding_dim=64
-    ).to(device)
-
-    # Encoder
-    encoder = ImpalaEncoder(
-        width=1,
-        stack_sizes=(16, 256, 256),
-        num_blocks=2,
-        dropout_rate=None,
-        layer_norm=False,
-        input_channels=1,
-        final_ln=True,
-        mlp_output_dim=512,
-        input_shape=(1, 84, 84),
-    ).to(device)
-
-    # Predictor
-    predictor = RNNPredictor(
-        hidden_size=512,
-        action_dim=64,
-        num_layers=1,
-        final_ln=nn.LayerNorm(512),
-        action_encoder=action_encoder,
-    ).to(device)
-
-    # JEPA
-    loss_fn = SquareLossSeq()
-
-    # Create IDM for regularizer
-    idm = DiscreteInverseDynamicsModel(state_dim=512, hidden_dim=256, num_actions=4)
-    regularizer = VC_IDM_Sim_Regularizer(
-        idm=idm,
-        cov_coeff=8,
-        std_coeff=16,
-        sim_coeff_t=12,
-        idm_coeff=1,
+    jepa, cfg, data_config = load_jepa_from_checkpoint(
+        checkpoint_path=checkpoint_path,
+        config_path=str(config_path),
+        device='auto'
     )
 
-    jepa = JEPA(encoder, nn.Identity(), predictor, regularizer, loss_fn).to(device)
-    jepa.load_state_dict(checkpoint['model_state_dict'])
-    jepa.eval()
+    device = next(jepa.parameters()).device
+    print(f"Device: {device}")
     print("✅ JEPA model loaded")
+
+    # Load checkpoint to get reward head
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     # Load reward head if using predicted_reward objective
     reward_head = None
