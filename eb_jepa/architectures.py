@@ -534,10 +534,9 @@ class DiscreteActionEncoder(nn.Module):
         # actions: [B, 1, T] -> squeeze to [B, T]
         actions_squeezed = actions.squeeze(1).long()
 
-        # Debug: check action indices
+        # Check action indices
         assert actions_squeezed.min() >= 0, f"Negative action index: {actions_squeezed}"
         assert actions_squeezed.max() < self.embedding.num_embeddings, f"Action index out of range: {actions_squeezed.max()} >= {self.embedding.num_embeddings}"
-        print("Action indices:", actions_squeezed)
 
         # Embed: [B, T] -> [B, T, embedding_dim]
         embedded = self.embedding(actions_squeezed)
