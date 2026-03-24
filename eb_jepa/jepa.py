@@ -194,7 +194,8 @@ class JEPA(JEPAbase):
                     if (action_slice < 0).any():
                         print(f"{prefix}WARNING: Negative action index in action_slice: {action_slice.tolist()}")
                     assert (action_slice >= 0).all(), f"Negative action index in action_slice: {action_slice}"
-                    context_actions = self.action_encoder(action_slice)
+                    # Don't encode here - predictor will encode actions internally
+                    context_actions = action_slice
                 else:
                     context_actions = None
                 # Take last ctxt_window_time states

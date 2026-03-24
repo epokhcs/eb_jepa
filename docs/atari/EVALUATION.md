@@ -8,6 +8,8 @@ Complete guide to evaluating trained JEPA world models and comparing planning al
 
 1. [Quick Evaluation](#quick-evaluation)
 2. [Testing Prediction Quality](#testing-prediction-quality)
+   - [Latent-Space Evaluation (Recommended)](#1-latent-space-evaluation-recommended)
+   - [Pixel-Space Visualization](#2-pixel-space-visualization-complementary)
 3. [Testing Reward Prediction](#testing-reward-prediction)
 4. [Planning Algorithms](#planning-algorithms)
 5. [Planning Objectives](#planning-objectives)
@@ -39,9 +41,14 @@ export CHECKPOINT="checkpoints/ac_video_jepa/dev_YYYY-MM-DD_HH-MM/.../latest.pth
 ### Quick Test Commands
 
 ```bash
-# 1. Test prediction quality
-python examples/ac_video_jepa/simple_visualize.py \
-  --checkpoint $CHECKPOINT
+# 1. Test prediction quality in latent space (recommended)
+python examples/ac_video_jepa/evaluate_latent_predictions.py \
+  --checkpoint $CHECKPOINT \
+  --config checkpoints/ac_video_jepa/.../config.yaml \
+  --policy random \
+  --num_episodes 10 \
+  --num_samples 100 \
+  --max_horizon 8
 
 # 2. Test reward prediction accuracy
 python examples/ac_video_jepa/test_reward_prediction.py \
@@ -59,7 +66,100 @@ python examples/ac_video_jepa/compare_planning_objectives.py \
 
 ## Testing Prediction Quality
 
-### Visualize Action-Conditioned Predictions
+### 1. Latent-Space Evaluation (Recommended)
+
+**Best approach for evaluating world model quality without needing a decoder.**
+
+This method measures how well the JEPA model predicts future states by comparing predicted and actual latent representations:
+
+```bash
+# Comprehensive evaluation with diverse gameplay (300 samples)
+python examples/ac_video_jepa/evaluate_latent_predictions.py \
+  --checkpoint $CHECKPOINT \
+  --config checkpoints/ac_video_jepa/.../config.yaml \
+  --policy random \
+  --num_episodes 30 \
+  --num_samples 300 \
+  --max_horizon 16 \
+  --output_dir visualizations/latent_eval
+
+# Quick test (smaller dataset)
+python examples/ac_video_jepa/evaluate_latent_predictions.py \
+  --checkpoint $CHECKPOINT \
+  --config checkpoints/ac_video_jepa/.../config.yaml \
+  --policy tracking \
+  --num_episodes 10 \
+  --num_samples 100 \
+  --max_horizon 8
+```
+
+**How it works:**
+
+1. **Record gameplay trajectories** with real actions and observations
+2. **Rollout predictions** from initial states using `jepa.unroll()`
+3. **Encode both predicted and actual frames** to latent space
+4. **Compute cosine similarity** between predicted and actual latent representations
+5. **Plot similarity degradation** over prediction horizon
+
+**Key advantages:**
+- ✅ No decoder needed (decoder-free evaluation)
+- ✅ Measures true world model understanding in latent space
+- ✅ Shows both mean performance and variance across diverse scenarios
+- ✅ Reveals effective prediction horizon
+- ✅ Tests with diverse gameplay (ball bounces, brick breaks, paddle movements)
+
+**Output:**
+
+The script generates:
+- `latent_similarity.png`: Visualization showing cosine similarity vs prediction horizon
+- `results.pkl`: Raw data with mean/std for each horizon
+
+**Example results with 300 diverse samples (random policy):**
+
+![Latent-Space Evaluation - Comprehensive](assets/latent_eval_comprehensive.png)
+
+**Key metrics:**
+
+| Horizon | Mean Similarity | Std Dev | Interpretation |
+|---------|----------------|---------|----------------|
+| 1 step  | 98.03% | ±2.86% | Excellent short-term prediction |
+| 4 steps | 86.80% | ±16.30% | Good prediction quality |
+| 8 steps | 79.05% | ±21.71% | Effective prediction horizon |
+| 16 steps | 68.28% | ±26.44% | High uncertainty, degraded quality |
+
+**Interpretation:**
+
+- **>95% similarity**: Excellent prediction, model understands dynamics very well
+- **90-95%**: Very good, suitable for planning
+- **80-90%**: Good, effective prediction horizon
+- **70-80%**: Moderate, predictions becoming unreliable
+- **<70%**: Poor, predictions diverging significantly
+
+- **Variance increases with horizon**: Normal behavior - longer predictions have more uncertainty
+- **Effective prediction horizon**: Where similarity drops below 80% (typically 6-10 steps for early training)
+
+**Policy comparison:**
+
+- **Tracking policy** (paddle follows ball): More predictable, higher similarity scores
+- **Random policy** (diverse actions): Tests true capability, reveals weaknesses
+- **Use random policy** for comprehensive evaluation to avoid overestimating model performance
+
+**Early training checkpoint example** (311 steps, ~31% of epoch 0):
+
+![Latent-Space Evaluation - Simple](assets/latent_eval_simple.png)
+
+Even with minimal training, the model shows:
+- 100% similarity at 1 step
+- >95% similarity up to 4 steps
+- Graceful degradation beyond
+
+This demonstrates that the JEPA architecture learns Breakout dynamics quickly!
+
+---
+
+### 2. Pixel-Space Visualization (Complementary)
+
+**Use this alongside latent evaluation for visual inspection.**
 
 ```bash
 # Generate comprehensive visualization
