@@ -43,28 +43,39 @@ def evaluate_reward_head(jepa, val_loader, device, num_batches=50):
             if i >= num_batches:
                 break
 
-            # Unpack batch
-            obs = batch['obs'].to(device)  # [B, C, T, H, W]
-            rewards = batch.get('rewards', None)
+            # Unpack batch (TrajectoryBatch format)
+            if hasattr(batch, 'states'):
+                # NamedTuple format
+                obs = batch.states.to(device)  # [B, C, T, H, W]
+                rewards = batch.metadata.get('rewards', None)
+                if rewards is not None:
+                    rewards = rewards.to(device)
+            elif isinstance(batch, dict):
+                obs = batch['obs'].to(device)
+                rewards = batch.get('rewards', None)
+                if rewards is not None:
+                    rewards = rewards.to(device)
+            else:
+                # Tuple format
+                obs, actions, rewards = batch[:3] if len(batch) >= 3 else (batch[0], None, None)
+                obs = obs.to(device)
+                if rewards is not None:
+                    rewards = rewards.to(device)
 
             if rewards is None:
                 print("Warning: No rewards in batch, skipping...")
                 continue
 
-            rewards = rewards.to(device)  # [B, T]
-
             # Get batch size and sequence length
             B, C, T, H, W = obs.shape
 
             # Encode observations to get latent states
-            # Reshape: [B, C, T, H, W] -> [B*T, C, H, W]
-            obs_flat = obs.permute(0, 2, 1, 3, 4).reshape(B*T, C, H, W)
-            latents_flat = jepa.encoder(obs_flat)  # [B*T, D, H', W']
+            # Encoder expects [B, C, T, H, W] and returns [B, D, T, H', W']
+            latents = jepa.encoder(obs)  # [B, D, T, H', W']
 
-            # Reshape back: [B*T, D, H', W'] -> [B, D, T, H', W']
-            D = latents_flat.shape[1]
-            H_prime, W_prime = latents_flat.shape[2], latents_flat.shape[3]
-            latents = latents_flat.reshape(B, T, D, H_prime, W_prime).permute(0, 2, 1, 3, 4)
+            # Get latent dimensions
+            D = latents.shape[1]
+            H_prime, W_prime = latents.shape[3], latents.shape[4]
 
             # Predict rewards for each timestep
             # Reshape for reward head: [B, D, T, H', W'] -> [B*T, D, H', W']
