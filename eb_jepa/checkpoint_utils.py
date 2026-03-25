@@ -163,10 +163,6 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
         predcost=None,  # or set appropriately if needed
     )
 
-    # Attach reward head as attribute if enabled
-    if reward_head is not None:
-        jepa.reward_head = reward_head
-
     # Load checkpoint
     logger.info(f"Loading checkpoint from: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -176,9 +172,19 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
     # Remove _orig_mod. prefix if present
     if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
         state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+    # Separate reward_head state from JEPA state
+    jepa_state_dict = {}
+    reward_head_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith('reward_head.'):
+            reward_head_state_dict[k.replace('reward_head.', '')] = v
+        else:
+            jepa_state_dict[k] = v
+
     # Map aencoder.* keys to action_encoder.* for compatibility
     mapped_state_dict = {}
-    for k, v in state_dict.items():
+    for k, v in jepa_state_dict.items():
         # Map aencoder.* to action_encoder.*
         if k.startswith('aencoder.'):
             mapped_state_dict['action_encoder.' + k[len('aencoder.'):]] = v
@@ -196,7 +202,18 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
         and 'action_encoder.embedding.weight' in mapped_state_dict
     ):
         mapped_state_dict['predictor.action_encoder.embedding.weight'] = mapped_state_dict['action_encoder.embedding.weight']
+
     jepa.load_state_dict(mapped_state_dict)
+
+    # Attach reward head as attribute if enabled and load its state
+    if reward_head is not None:
+        jepa.reward_head = reward_head
+        if reward_head_state_dict:
+            jepa.reward_head.load_state_dict(reward_head_state_dict)
+            logger.info("✅ Loaded reward head from checkpoint")
+        else:
+            logger.warning("⚠️  Reward head built but no state found in checkpoint")
+
     jepa.to(device)
     jepa.eval()
 
