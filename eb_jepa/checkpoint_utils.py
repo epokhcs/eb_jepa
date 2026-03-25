@@ -149,7 +149,7 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
     if getattr(cfg.model, 'reward_prediction', False):
         logger.info("Building reward head...")
         reward_head = RewardPredictionHead(
-            latent_dim=encoder.mlp_output_dim,
+            state_dim=encoder.mlp_output_dim,
             hidden_dim=getattr(cfg.model, 'reward_head_hidden_dim', 256),
         )
 
