@@ -12,6 +12,7 @@ from eb_jepa.architectures import (
     Projector,
     DiscreteInverseDynamicsModel,
     InverseDynamicsModel,
+    RewardPredictionHead,
 )
 from eb_jepa.datasets.registry import EnvironmentRegistry
 from eb_jepa.datasets.utils import load_env_data_config
@@ -143,6 +144,15 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
         **reg_args
     )
 
+    # Build reward head if enabled
+    reward_head = None
+    if getattr(cfg.model, 'reward_prediction', False):
+        logger.info("Building reward head...")
+        reward_head = RewardPredictionHead(
+            latent_dim=encoder.mlp_output_dim,
+            hidden_dim=getattr(cfg.model, 'reward_head_hidden_dim', 256),
+        )
+
     # Build JEPA model
     logger.info("Building JEPA model...")
     jepa = JEPA(
@@ -150,7 +160,8 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
         aencoder=aencoder,
         predictor=predictor,
         regularizer=regularizer,
-        predcost=None  # or set appropriately if needed
+        predcost=None,  # or set appropriately if needed
+        reward_head=reward_head,
     )
 
     # Load checkpoint
