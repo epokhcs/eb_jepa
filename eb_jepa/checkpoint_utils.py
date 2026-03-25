@@ -161,8 +161,11 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
         predictor=predictor,
         regularizer=regularizer,
         predcost=None,  # or set appropriately if needed
-        reward_head=reward_head,
     )
+
+    # Attach reward head as attribute if enabled
+    if reward_head is not None:
+        jepa.reward_head = reward_head
 
     # Load checkpoint
     logger.info(f"Loading checkpoint from: {checkpoint_path}")
