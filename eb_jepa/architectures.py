@@ -612,7 +612,7 @@ class RewardPredictionHead(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, 1),  # Output scalar reward
+            nn.Linear(hidden_dim // 2, 2),  # Output 2 logits for binary classification
         )
         self.apply(init_module_weights)
 
@@ -624,9 +624,9 @@ class RewardPredictionHead(nn.Module):
                    or: [B, D, H, W] for single state
 
         Returns:
-            predicted_rewards: Predicted reward values
-                Shape: [B, T] for sequence
-                   or: [B] for single state
+            predicted_reward_logits: Predicted reward logits for binary classification
+                Shape: [B, T, 2] for sequence (2 classes: no reward, reward)
+                   or: [B, 2] for single state
         """
         # Handle both sequence and single state inputs
         if latent_states.ndim == 5:  # [B, D, T, H, W]
@@ -650,11 +650,11 @@ class RewardPredictionHead(nn.Module):
         else:
             raise ValueError(f"Unknown spatial_aggregate: {self.spatial_aggregate}")
 
-        # Predict reward
-        rewards = self.model(x).squeeze(-1)  # [B*T] or [B]
+        # Predict reward logits
+        logits = self.model(x)  # [B*T, 2] or [B, 2]
 
         # Reshape sequence outputs
         if is_sequence:
-            rewards = rewards.view(B, T)  # [B, T]
+            logits = logits.view(B, T, 2)  # [B, T, 2]
 
-        return rewards
+        return logits

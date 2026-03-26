@@ -77,20 +77,19 @@ def evaluate_reward_head(jepa, val_loader, device, num_batches=50):
             D = latents.shape[1]
             H_prime, W_prime = latents.shape[3], latents.shape[4]
 
-            # Predict rewards for each timestep
-            # Reshape for reward head: [B, D, T, H', W'] -> [B*T, D, H', W']
-            latents_for_reward = latents.permute(0, 2, 1, 3, 4).reshape(B*T, D, H_prime, W_prime)
-            pred_rewards_flat = jepa.reward_head(latents_for_reward)  # [B*T, 1]
+            # Predict reward logits for each timestep
+            # Encoder returns [B, D, T, H', W'], permute for reward head
+            logits = jepa.reward_head(latents)  # [B, T, 2]
 
-            # Reshape predictions: [B*T, 1] -> [B, T]
-            pred_rewards = pred_rewards_flat.reshape(B, T)
+            # Get probabilities for reward class (index 1)
+            probs = torch.softmax(logits, dim=-1)[:, :, 1]  # [B, T]
 
             # Collect predictions and ground truth
-            all_pred_rewards.append(pred_rewards.cpu().numpy())
+            all_pred_rewards.append(probs.cpu().numpy())
             all_true_rewards.append(rewards.cpu().numpy())
 
             # Convert to binary classes (reward vs no reward)
-            pred_classes = (pred_rewards > 0.5).long()
+            pred_classes = (probs > 0.5).long()
             true_classes = (rewards > 0.5).long()
 
             all_pred_classes.append(pred_classes.cpu().numpy())
@@ -98,20 +97,25 @@ def evaluate_reward_head(jepa, val_loader, device, num_batches=50):
 
             # Update progress bar with running stats
             if i % 5 == 0:
-                temp_pred = np.concatenate(all_pred_rewards, axis=0).flatten()
-                temp_true = np.concatenate(all_true_rewards, axis=0).flatten()
-                mse = np.mean((temp_pred - temp_true) ** 2)
-                pbar.set_postfix({'MSE': f'{mse:.4f}'})
+                temp_pred = np.concatenate(all_pred_classes, axis=0).flatten()
+                temp_true = np.concatenate(all_true_classes, axis=0).flatten()
+                acc = np.mean(temp_pred == temp_true)
+                pbar.set_postfix({'Accuracy': f'{acc:.4f}'})
 
     # Concatenate all results
-    pred_rewards = np.concatenate(all_pred_rewards, axis=0).flatten()
-    true_rewards = np.concatenate(all_true_rewards, axis=0).flatten()
+    pred_probs = np.concatenate(all_pred_rewards, axis=0).flatten()  # Predicted probabilities
+    true_labels = np.concatenate(all_true_rewards, axis=0).flatten()  # Ground truth (continuous)
     pred_classes = np.concatenate(all_pred_classes, axis=0).flatten()
     true_classes = np.concatenate(all_true_classes, axis=0).flatten()
 
-    # Compute metrics
-    mse = np.mean((pred_rewards - true_rewards) ** 2)
-    mae = np.mean(np.abs(pred_rewards - true_rewards))
+    # Compute calibration metrics (how well probabilities match binary labels)
+    # For perfect calibration: prob should be close to 1 when reward=1, close to 0 when reward=0
+    true_binary = (true_labels > 0.5).astype(float)
+    brier_score = np.mean((pred_probs - true_binary) ** 2)  # Like MSE but for probabilities
+
+    # Average predicted probability for each class
+    mean_prob_no_reward = np.mean(pred_probs[true_classes == 0]) if np.any(true_classes == 0) else 0.0
+    mean_prob_reward = np.mean(pred_probs[true_classes == 1]) if np.any(true_classes == 1) else 0.0
 
     # Classification accuracy (reward vs no reward)
     accuracy = np.mean(pred_classes == true_classes)
@@ -133,18 +137,19 @@ def evaluate_reward_head(jepa, val_loader, device, num_batches=50):
     reward_ratio = num_rewards / len(true_classes)
 
     results = {
-        'mse': mse,
-        'mae': mae,
+        'brier_score': brier_score,
+        'mean_prob_no_reward': mean_prob_no_reward,
+        'mean_prob_reward': mean_prob_reward,
         'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'num_samples': len(pred_rewards),
+        'num_samples': len(pred_probs),
         'num_rewards': num_rewards,
         'num_no_rewards': num_no_rewards,
         'reward_ratio': reward_ratio,
-        'pred_rewards': pred_rewards,
-        'true_rewards': true_rewards,
+        'pred_rewards': pred_probs,  # Now probabilities, not scalars
+        'true_rewards': true_labels,
         'pred_classes': pred_classes,
         'true_classes': true_classes,
     }
@@ -212,12 +217,13 @@ def plot_results(results, output_dir):
     ax.axis('off')
 
     summary_text = f"""
-    Reward Prediction Quality Summary
+    Binary Reward Classification Summary
     {'='*40}
 
-    Regression Metrics:
-    • MSE: {results['mse']:.4f}
-    • MAE: {results['mae']:.4f}
+    Calibration Metrics:
+    • Brier Score: {results['brier_score']:.4f}
+    • Mean prob (no reward): {results['mean_prob_no_reward']:.4f}
+    • Mean prob (reward): {results['mean_prob_reward']:.4f}
 
     Classification Metrics (threshold=0.5):
     • Accuracy: {results['accuracy']:.2%}
@@ -296,11 +302,12 @@ def main():
 
     # Print results
     print("\n" + "="*70)
-    print("RESULTS")
+    print("RESULTS (Binary Classification)")
     print("="*70)
-    print(f"\nRegression Metrics:")
-    print(f"  MSE: {results['mse']:.6f}")
-    print(f"  MAE: {results['mae']:.6f}")
+    print(f"\nProbability Calibration:")
+    print(f"  Brier Score: {results['brier_score']:.4f} (lower is better)")
+    print(f"  Mean prob (no reward class): {results['mean_prob_no_reward']:.4f}")
+    print(f"  Mean prob (reward class):    {results['mean_prob_reward']:.4f}")
 
     print(f"\nClassification Metrics (threshold=0.5):")
     print(f"  Accuracy:  {results['accuracy']:.2%}")

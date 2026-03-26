@@ -278,13 +278,24 @@ def run(
             spatial_aggregate="mean",
         ).to(device)
 
-        reward_loss_fn = RewardPredictionLoss(reward_head)
+        # Compute class weights for imbalanced data (sparse rewards)
+        # For binary classification: [no_reward, reward]
+        if cfg.model.get("reward_use_class_weights", True):
+            # Default: give 100x more weight to positive class (rewards)
+            pos_weight = cfg.model.get("reward_positive_weight", 100.0)
+            class_weights = torch.tensor([1.0, pos_weight], device=device)
+            logger.info(f"Using class weights for reward prediction: [1.0, {pos_weight}]")
+        else:
+            class_weights = None
+            logger.info("No class weights for reward prediction (uniform)")
+
+        reward_loss_fn = RewardPredictionLoss(reward_head, class_weights=class_weights)
         reward_optimizer = torch.optim.AdamW(
             reward_head.parameters(),
             lr=cfg.optim.lr,
             weight_decay=cfg.optim.weight_decay,
         )
-        logger.info(f"Reward prediction head enabled (state_dim={state_dim})")
+        logger.info(f"Reward prediction head enabled (state_dim={state_dim}, binary classification)")
 
     # Create regularizer with pre-wrapped IDM loss
     # We pass idm=None and manually set idm_loss_fn to use the correct loss type

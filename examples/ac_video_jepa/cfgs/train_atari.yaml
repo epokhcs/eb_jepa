@@ -45,10 +45,13 @@ model:
   encoder_skip_connections: true
   predictor_skip_connections: true
   action_embedding_dim: 32  # Embedding dimension for discrete actions (reduced from 64)
-  # Reward prediction settings
+  # Reward prediction settings (binary classification)
   reward_prediction: true  # Enable reward prediction head
   reward_head_hidden_dim: 256  # Hidden dimension for reward head
   reward_loss_coeff: 1.0  # Coefficient for reward prediction loss
+  reward_use_class_weights: true  # Use class weights to handle imbalance
+  reward_positive_weight: 100.0  # Weight for positive class (rewards present)
+  reward_threshold: 0.5  # Threshold for converting continuous rewards to binary labels
   regularizer:
     cov_coeff: 8
     std_coeff: 16

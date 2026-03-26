@@ -447,32 +447,47 @@ class BCS(nn.Module):
 
 class RewardPredictionLoss(nn.Module):
     """
-    MSE loss for reward prediction.
+    Cross-entropy loss for binary reward classification.
 
-    Predicts the immediate reward r_t from the latent state at time t.
+    Predicts whether a reward occurs (present/absent) from the latent state at time t.
+    Uses class weights to handle extreme class imbalance (sparse rewards).
     """
 
-    def __init__(self, reward_head: nn.Module):
+    def __init__(self, reward_head: nn.Module, class_weights: torch.Tensor = None):
         """
         Args:
-            reward_head: RewardPredictionHead module
+            reward_head: RewardPredictionHead module (outputs logits for 2 classes)
+            class_weights: Tensor of shape [2] with weights for [no_reward, reward] classes.
+                          Used to handle class imbalance. If None, uses uniform weights.
         """
         super().__init__()
         self.reward_head = reward_head
+        self.register_buffer('class_weights', class_weights)
 
     def forward(self, predicted_latents: torch.Tensor, target_rewards: torch.Tensor) -> torch.Tensor:
         """
         Args:
             predicted_latents: Predicted latent states, shape [B, D, T, H, W]
-            target_rewards: Ground truth rewards, shape [B, T]
+            target_rewards: Ground truth rewards, shape [B, T] (continuous values)
 
         Returns:
-            loss: MSE between predicted and target rewards
+            loss: Cross-entropy loss for binary classification
         """
-        # Predict rewards from latent states
-        predicted_rewards = self.reward_head(predicted_latents)  # [B, T]
+        # Predict reward logits from latent states
+        logits = self.reward_head(predicted_latents)  # [B, T, 2]
 
-        # Compute MSE loss
-        loss = F.mse_loss(predicted_rewards, target_rewards)
+        # Convert continuous rewards to binary labels (reward > threshold = 1, else 0)
+        binary_labels = (target_rewards > 0.5).long()  # [B, T]
+
+        # Flatten for cross-entropy
+        logits_flat = logits.view(-1, 2)  # [B*T, 2]
+        labels_flat = binary_labels.view(-1)  # [B*T]
+
+        # Compute cross-entropy with optional class weights
+        loss = F.cross_entropy(
+            logits_flat,
+            labels_flat,
+            weight=self.class_weights
+        )
 
         return loss
