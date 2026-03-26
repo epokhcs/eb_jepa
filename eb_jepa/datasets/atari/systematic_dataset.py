@@ -123,8 +123,8 @@ class SystematicAtariDataset(DatasetBase):
         # states: [T, H, W] -> [1, T, H, W] (grayscale channel)
         states = torch.stack(states).unsqueeze(0)
 
-        # actions: [T] -> [1, T] (discrete actions)
-        actions = torch.tensor(actions, dtype=torch.float32).unsqueeze(0)
+        # actions: [T] -> [1, T] (discrete actions as integers)
+        actions = torch.tensor(actions, dtype=torch.int64).unsqueeze(0)
 
         # Create metadata
         metadata = {
