@@ -5,12 +5,47 @@ import yaml
 
 from eb_jepa.datasets.registry import EnvironmentRegistry
 from eb_jepa.datasets.two_rooms.utils import update_config_from_yaml
+from eb_jepa.datasets.base import TrajectoryBatch
 
 # Import to trigger registration
 import eb_jepa.datasets.two_rooms  # noqa: F401
 import eb_jepa.datasets.atari  # noqa: F401
 
 DATASETS_DIR = Path(__file__).parent
+
+
+def trajectory_collate_fn(batch):
+    """
+    Custom collate function that preserves dtype for actions.
+
+    PyTorch's default collate converts everything to float32, but we need
+    to preserve int64 for discrete actions.
+
+    Args:
+        batch: List of TrajectoryBatch objects
+
+    Returns:
+        TrajectoryBatch with batched tensors
+    """
+    # Stack states (convert to float32)
+    states = torch.stack([item.states for item in batch])
+
+    # Stack actions - preserve original dtype (int64 for discrete)
+    actions = torch.stack([item.actions for item in batch])
+
+    # Merge metadata dicts
+    metadata = {}
+    for key in batch[0].metadata.keys():
+        values = [item.metadata[key] for item in batch]
+
+        # Stack tensor values, preserve dtype
+        if isinstance(values[0], torch.Tensor):
+            metadata[key] = torch.stack(values)
+        # Keep lists/scalars as lists
+        else:
+            metadata[key] = values
+
+    return TrajectoryBatch(states=states, actions=actions, metadata=metadata)
 
 
 def load_env_data_config(env_name: str, overrides: dict = None) -> dict:
@@ -79,6 +114,7 @@ def init_data(env_name, cfg_data=None, **kwargs):
         pin_memory=pin_mem,
         drop_last=True,
         persistent_workers=persistent_workers,
+        collate_fn=trajectory_collate_fn,  # Preserve action dtype
     )
 
     # Create validation dataloader
@@ -90,6 +126,7 @@ def init_data(env_name, cfg_data=None, **kwargs):
         pin_memory=pin_mem,
         drop_last=True,
         persistent_workers=persistent_workers,
+        collate_fn=trajectory_collate_fn,  # Preserve action dtype
     )
 
     return loader, val_loader, config
