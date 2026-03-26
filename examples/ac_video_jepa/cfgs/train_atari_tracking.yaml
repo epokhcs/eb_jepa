@@ -1,0 +1,77 @@
+# ATARI Breakout Training Configuration - Tracking Policy Dataset
+# Uses the tracking policy dataset which achieved 124 total rewards
+
+logging:
+  log_wandb: true
+  wandb_group:
+  wandb_sweep:
+  log_every: 10
+  exp_suffix: atari_tracking
+  save_every_n_epochs: 1
+  tqdm_silent: false
+
+meta:
+  model_folder:
+  load_model: true
+  enable_plan_eval: false
+  eval_every_itr: -1
+  light_eval_freq: 50
+  seed: 1
+
+data:
+  env_name: atari
+  game_name: Breakout
+  batch_size: 32
+  size: 10000
+  val_size: 1000
+  num_workers: 0
+  pin_mem: false
+  persistent_workers: false
+  # Use systematic dataset with tracking policy (highest reward: 124)
+  use_systematic_dataset: true
+  systematic_dataset_path: data/tracking_policy/breakout_systematic_paddle_sweep.pkl
+
+training:
+  use_amp: true
+  dtype: bfloat16
+
+model:
+  compile: true
+  dobs: 1  # Grayscale
+  henc: 256
+  hpre: 256
+  dstc: 256
+  nsteps: 8
+  encoder_architecture: impala  # impala | resnet | conv
+  train_rollout: last  # last | all
+  encoder_skip_connections: true
+  predictor_skip_connections: true
+  action_embedding_dim: 4  # Embedding dimension for discrete actions
+  # Reward prediction settings (binary classification)
+  reward_prediction: true  # Enable reward prediction head
+  reward_head_hidden_dim: 256  # Hidden dimension for reward head
+  reward_loss_coeff: 1.0  # Coefficient for reward prediction loss
+  reward_use_class_weights: true  # Use class weights to handle imbalance
+  reward_positive_weight: 100.0  # Weight for positive class (rewards present)
+  reward_threshold: 0.5  # Threshold for converting continuous rewards to binary labels
+  regularizer:
+    cov_coeff: 8
+    std_coeff: 16
+    sim_coeff_t: 12
+    idm_coeff: 1
+    first_t_only: false
+    spatial_as_samples: false
+    use_proj: false
+    idm_after_proj: false
+    sim_t_after_proj: false
+
+optim:
+  epochs: 5
+  lr: 0.0001
+  grad_clip_enc: 2.0
+  grad_clip_pred: 2.0
+  weight_decay: 1.e-5
+
+eval:
+  plan_cfg_path: examples/ac_video_jepa/cfgs/planning_mppi.yaml
+  eval_cfg_path: examples/ac_video_jepa/cfgs/eval.yaml
