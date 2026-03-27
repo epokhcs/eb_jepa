@@ -104,8 +104,12 @@ class DiscreteMPPIPlanner:
                     cost = -predicted_states.var(dim=(1, 3, 4)).mean()
                 elif self.objective == "predicted_reward":
                     # New: maximize predicted cumulative reward
-                    predicted_rewards = self.reward_head(predicted_states)  # [1, horizon]
-                    cost = -predicted_rewards.sum()  # Negative because we minimize cost
+                    # Reward head outputs logits [1, horizon, 2] for binary classification
+                    logits = self.reward_head(predicted_states)  # [1, horizon, 2]
+                    # Get probability of reward class (index 1)
+                    probs = torch.softmax(logits, dim=-1)[:, :, 1]  # [1, horizon]
+                    # Maximize expected cumulative reward
+                    cost = -probs.sum()  # Negative because we minimize cost
                 else:
                     raise ValueError(f"Unknown objective: {self.objective}")
 
@@ -185,8 +189,12 @@ class DiscreteCEMPlanner:
                         cost = -predicted_states.var(dim=(1, 3, 4)).mean()
                     elif self.objective == "predicted_reward":
                         # New: maximize predicted cumulative reward
-                        predicted_rewards = self.reward_head(predicted_states)  # [1, horizon]
-                        cost = -predicted_rewards.sum()  # Negative because we minimize cost
+                        # Reward head outputs logits [1, horizon, 2] for binary classification
+                        logits = self.reward_head(predicted_states)  # [1, horizon, 2]
+                        # Get probability of reward class (index 1)
+                        probs = torch.softmax(logits, dim=-1)[:, :, 1]  # [1, horizon]
+                        # Maximize expected cumulative reward
+                        cost = -probs.sum()  # Negative because we minimize cost
                     else:
                         raise ValueError(f"Unknown objective: {self.objective}")
 
@@ -249,27 +257,25 @@ def test_planning(checkpoint_path, planner_type="mppi", objective="latent_varian
     print(f"Device: {device}")
     print("✅ JEPA model loaded")
 
-    # Load checkpoint to get reward head
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-    # Load reward head if using predicted_reward objective
+    # Get reward head from JEPA (already loaded by load_jepa_from_checkpoint)
     reward_head = None
     if objective == "predicted_reward":
-        print("\nLoading reward prediction head...")
-        state_dim = 512  # From encoder mlp_output_dim
-        reward_head = RewardPredictionHead(
-            state_dim=state_dim,
-            hidden_dim=256,
-            spatial_aggregate="mean",
-        ).to(device)
-
-        if 'reward_head' in checkpoint:
-            reward_head.load_state_dict(checkpoint['reward_head'])
+        print("\nChecking reward prediction head...")
+        if hasattr(jepa, 'reward_head') and jepa.reward_head is not None:
+            reward_head = jepa.reward_head
             print("✅ Reward head loaded from checkpoint")
         else:
             print("⚠️  WARNING: No reward head in checkpoint!")
             print("    Using random initialization - results will be poor.")
             print("    Please train with reward_prediction=true first.")
+
+            # Create random reward head as fallback
+            state_dim = 512  # From encoder mlp_output_dim
+            reward_head = RewardPredictionHead(
+                state_dim=state_dim,
+                hidden_dim=256,
+                spatial_aggregate="mean",
+            ).to(device)
 
         reward_head.eval()
 
