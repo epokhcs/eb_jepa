@@ -173,14 +173,10 @@ def load_jepa_from_checkpoint(checkpoint_path: str, config_path: str, device='au
     if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
         state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
 
-    # Separate reward_head state from JEPA state
-    jepa_state_dict = {}
-    reward_head_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith('reward_head.'):
-            reward_head_state_dict[k.replace('reward_head.', '')] = v
-        else:
-            jepa_state_dict[k] = v
+    # Load reward head state dict (stored separately in checkpoint)
+    reward_head_state_dict = checkpoint.get('reward_head_state_dict', None)
+
+    jepa_state_dict = state_dict
 
     # Map aencoder.* keys to action_encoder.* for compatibility
     mapped_state_dict = {}
