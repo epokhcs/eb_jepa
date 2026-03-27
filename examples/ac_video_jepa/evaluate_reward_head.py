@@ -158,36 +158,45 @@ def evaluate_reward_head(jepa, val_loader, device, num_batches=50):
 
 
 def plot_results(results, output_dir):
-    """Plot reward prediction results."""
+    """Plot reward prediction results for binary classification."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-    # 1. Predicted vs True rewards scatter
+    # 1. ROC Curve
     ax = axes[0, 0]
-    ax.scatter(results['true_rewards'], results['pred_rewards'], alpha=0.3, s=1)
-    ax.plot([0, 1], [0, 1], 'r--', label='Perfect prediction')
-    ax.set_xlabel('True Rewards')
-    ax.set_ylabel('Predicted Rewards')
-    ax.set_title('Predicted vs True Rewards')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    from sklearn.metrics import roc_curve, roc_auc_score
 
-    # 2. Distribution of predictions
+    # Compute ROC curve
+    fpr, tpr, thresholds = roc_curve(results['true_classes'], results['pred_rewards'])
+    roc_auc = roc_auc_score(results['true_classes'], results['pred_rewards'])
+
+    ax.plot(fpr, tpr, 'b-', linewidth=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
+    ax.plot([0, 1], [0, 1], 'r--', linewidth=2, label='Random classifier')
+    ax.set_xlabel('False Positive Rate', fontsize=11)
+    ax.set_ylabel('True Positive Rate', fontsize=11)
+    ax.set_title('ROC Curve - Reward Classification', fontsize=12, fontweight='bold')
+    ax.legend(loc='lower right')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([-0.05, 1.05])
+    ax.set_ylim([-0.05, 1.05])
+
+    # 2. Distribution of predicted probabilities
     ax = axes[0, 1]
     ax.hist(results['pred_rewards'][results['true_classes'] == 0],
-            bins=50, alpha=0.5, label='No reward (true)', density=True)
+            bins=50, alpha=0.6, label='No reward (true)', density=True, color='blue')
     ax.hist(results['pred_rewards'][results['true_classes'] == 1],
-            bins=50, alpha=0.5, label='Reward (true)', density=True)
-    ax.axvline(0.5, color='r', linestyle='--', label='Threshold')
-    ax.set_xlabel('Predicted Reward Value')
-    ax.set_ylabel('Density')
-    ax.set_title('Distribution of Predictions')
-    ax.legend()
+            bins=50, alpha=0.6, label='Reward (true)', density=True, color='orange')
+    ax.axvline(0.5, color='red', linestyle='--', linewidth=2, label='Classification threshold')
+    ax.set_xlabel('Predicted Probability of Reward', fontsize=11)
+    ax.set_ylabel('Density', fontsize=11)
+    ax.set_title('Probability Distribution by True Class', fontsize=12, fontweight='bold')
+    ax.legend(loc='upper right')
     ax.grid(True, alpha=0.3)
+    ax.set_xlim([-0.05, 1.05])
 
-    # 3. Confusion matrix
+    # 3. Confusion matrix (normalized)
     ax = axes[1, 0]
     tp = np.sum((results['pred_classes'] == 1) & (results['true_classes'] == 1))
     fp = np.sum((results['pred_classes'] == 1) & (results['true_classes'] == 0))
@@ -195,37 +204,52 @@ def plot_results(results, output_dir):
     tn = np.sum((results['pred_classes'] == 0) & (results['true_classes'] == 0))
 
     confusion = np.array([[tn, fp], [fn, tp]])
-    im = ax.imshow(confusion, cmap='Blues', aspect='auto')
+
+    # Normalize by row (true class) for better visualization
+    confusion_norm = confusion.astype(float) / confusion.sum(axis=1, keepdims=True)
+
+    im = ax.imshow(confusion_norm, cmap='Blues', aspect='auto', vmin=0, vmax=1)
     ax.set_xticks([0, 1])
     ax.set_yticks([0, 1])
-    ax.set_xticklabels(['No Reward', 'Reward'])
-    ax.set_yticklabels(['No Reward', 'Reward'])
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('True')
-    ax.set_title('Confusion Matrix')
+    ax.set_xticklabels(['No Reward', 'Reward'], fontsize=11)
+    ax.set_yticklabels(['No Reward', 'Reward'], fontsize=11)
+    ax.set_xlabel('Predicted', fontsize=11)
+    ax.set_ylabel('True', fontsize=11)
+    ax.set_title('Confusion Matrix (Normalized)', fontsize=12, fontweight='bold')
 
-    # Add text annotations
+    # Add text annotations with counts and percentages
     for i in range(2):
         for j in range(2):
-            text = ax.text(j, i, f'{confusion[i, j]}',
-                          ha="center", va="center", color="black", fontsize=14)
+            count = confusion[i, j]
+            percentage = confusion_norm[i, j]
+            text = ax.text(j, i, f'{count:,}\n({percentage:.1%})',
+                          ha="center", va="center",
+                          color="white" if percentage > 0.5 else "black",
+                          fontsize=11, fontweight='bold')
 
-    plt.colorbar(im, ax=ax)
+    plt.colorbar(im, ax=ax, label='Fraction of true class')
 
     # 4. Metrics summary
     ax = axes[1, 1]
     ax.axis('off')
 
+    # Compute ROC-AUC for summary
+    from sklearn.metrics import roc_auc_score
+    roc_auc = roc_auc_score(results['true_classes'], results['pred_rewards'])
+
     summary_text = f"""
     Binary Reward Classification Summary
     {'='*40}
+
+    ROC Metrics:
+    • ROC-AUC: {roc_auc:.4f}
 
     Calibration Metrics:
     • Brier Score: {results['brier_score']:.4f}
     • Mean prob (no reward): {results['mean_prob_no_reward']:.4f}
     • Mean prob (reward): {results['mean_prob_reward']:.4f}
 
-    Classification Metrics (threshold=0.5):
+    Classification (threshold=0.5):
     • Accuracy: {results['accuracy']:.2%}
     • Precision: {results['precision']:.2%}
     • Recall: {results['recall']:.2%}
