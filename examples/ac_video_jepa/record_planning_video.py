@@ -8,6 +8,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import imageio
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,77 +16,34 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from eb_jepa.architectures import (
-    DiscreteActionEncoder,
-    DiscreteInverseDynamicsModel,
-    ImpalaEncoder,
-    RewardPredictionHead,
-    RNNPredictor,
-)
+from eb_jepa.checkpoint_utils import load_jepa_from_checkpoint
 from eb_jepa.datasets.atari.config import AtariConfig
 from eb_jepa.datasets.atari.env import AtariEnv
-from eb_jepa.jepa import JEPA
-from eb_jepa.losses import SquareLossSeq, VC_IDM_Sim_Regularizer
 
 
 def load_model_and_reward_head(checkpoint_path, device, objective):
-    """Load JEPA model and optional reward head."""
+    """Load JEPA model and optional reward head using proper checkpoint loader."""
     print("Loading checkpoint...")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
 
-    # Build model architecture (matching train_atari.yaml)
-    action_encoder = DiscreteActionEncoder(
-        num_actions=4,
-        embedding_dim=64
-    ).to(device)
+    # Get config path from checkpoint directory
+    checkpoint_dir = Path(checkpoint_path).parent
+    config_path = checkpoint_dir / "config.yaml"
 
-    encoder = ImpalaEncoder(
-        width=1,
-        stack_sizes=(16, 256, 256),
-        num_blocks=2,
-        dropout_rate=None,
-        layer_norm=False,
-        input_channels=1,
-        final_ln=True,
-        mlp_output_dim=512,
-        input_shape=(1, 84, 84),
-    ).to(device)
-
-    predictor = RNNPredictor(
-        hidden_size=512,
-        action_dim=64,
-        num_layers=1,
-        final_ln=nn.LayerNorm(512),
-        action_encoder=action_encoder,
-    ).to(device)
-
-    # Create IDM for regularizer
-    idm = DiscreteInverseDynamicsModel(state_dim=512, hidden_dim=256, num_actions=4)
-    regularizer = VC_IDM_Sim_Regularizer(
-        idm=idm,
-        cov_coeff=8,
-        std_coeff=16,
-        sim_coeff_t=12,
-        idm_coeff=1,
+    # Use the proper checkpoint loader (same as test_planning_with_rewards.py)
+    jepa, cfg, data_config = load_jepa_from_checkpoint(
+        str(checkpoint_path),
+        str(config_path),
+        device=device
     )
 
-    loss_fn = SquareLossSeq()
-    jepa = JEPA(encoder, nn.Identity(), predictor, regularizer, loss_fn).to(device)
-    jepa.load_state_dict(checkpoint['model_state_dict'])
     jepa.eval()
-    print("✅ JEPA model loaded")
+    print(f"✅ JEPA model loaded on {device}")
 
-    # Load reward head if using predicted_reward objective
-    reward_head = None
+    # Reward head is attached to jepa.reward_head if it exists
+    reward_head = getattr(jepa, 'reward_head', None)
     if objective == "predicted_reward":
-        print("\nLoading reward prediction head...")
-        state_dim = 512
-        reward_head = RewardPredictionHead(
-            state_dim=state_dim,
-            hidden_dim=256,
-            spatial_aggregate="mean",
-        ).to(device)
-        reward_head.load_state_dict(checkpoint['reward_head_state_dict'])
+        if reward_head is None:
+            raise ValueError("Reward prediction requested but no reward head found in checkpoint")
         reward_head.eval()
         print("✅ Reward head loaded")
 
@@ -93,80 +51,85 @@ def load_model_and_reward_head(checkpoint_path, device, objective):
 
 
 class MPPIPlanner:
-    """Simple MPPI planner."""
+    """MPPI planner for discrete actions (Atari)."""
 
-    def __init__(self, num_actions=4, horizon=8, num_samples=50, temperature=1.0):
+    def __init__(self, num_actions=4, horizon=16, num_samples=100, temperature=1.0):
         self.num_actions = num_actions
         self.horizon = horizon
         self.num_samples = num_samples
         self.temperature = temperature
 
     def plan(self, model, obs, reward_head, objective, device):
-        """Plan using MPPI."""
-        # Sample random action sequences
-        actions = torch.randint(
+        """Plan using MPPI with correct tensor shapes."""
+        # Sample actions with CORRECT shape: (num_samples, 1, horizon)
+        action_samples = torch.randint(
             0, self.num_actions,
-            (self.num_samples, self.horizon, 1),
+            (self.num_samples, 1, self.horizon),
             device=device
         )
 
-        # Rollout each sequence
-        obs_repeated = obs.repeat(self.num_samples, 1, 1, 1, 1)
+        costs = []
 
-        with torch.no_grad():
-            predicted_states, _ = model.unroll(
-                obs_repeated,
-                actions,
-                nsteps=self.horizon,
-                unroll_mode="autoregressive",
-                ctxt_window_time=1,
-                compute_loss=False,
-                return_all_steps=False,
-            )
+        # Process each sample INDIVIDUALLY (not batched)
+        for i in range(self.num_samples):
+            actions = action_samples[i:i+1]  # Shape: (1, 1, horizon)
 
-        # Compute costs
-        if objective == "latent_variance":
-            costs = -predicted_states.var(dim=(1, 3, 4)).mean(dim=1)
-        else:  # predicted_reward
-            predicted_rewards = reward_head(predicted_states)
-            costs = -predicted_rewards.sum(dim=1)
+            with torch.no_grad():
+                # Unroll with matching batch dimensions
+                predicted_states = model.unroll(
+                    obs,  # (1, C, 1, H, W) - batch size 1
+                    actions,  # (1, 1, horizon) - batch size 1
+                    nsteps=self.horizon,
+                    unroll_mode="autoregressive",
+                    ctxt_window_time=1,
+                    compute_loss=False,
+                    return_all_steps=False,
+                )[0]  # Shape: (1, C, horizon, H, W)
 
-        # Weight by softmax
-        weights = torch.softmax(-costs / self.temperature, dim=0)
+            # Compute cost based on objective
+            if objective == "predicted_reward" and reward_head is not None:
+                # Reward head outputs logits: (1, horizon, 2)
+                logits = reward_head(predicted_states)
 
-        # Return first action of best sequence
+                # Extract probability of reward class (class 1)
+                probs = torch.softmax(logits, dim=-1)[:, :, 1]  # (1, horizon)
+
+                # Cost is negative sum (we minimize cost, so maximize reward)
+                cost = -probs.sum()
+            else:
+                # Latent variance objective (baseline)
+                cost = -predicted_states.var(dim=(1, 3, 4)).mean()
+
+            costs.append(cost)
+
+        # Select action with lowest cost
+        costs = torch.stack(costs)
         best_idx = costs.argmin()
-        return actions[best_idx, 0, 0]
+        best_action = action_samples[best_idx, 0, 0].item()  # Extract first action
+
+        return best_action
 
 
 def record_video(checkpoint_path, planner_type, objective, output_path, num_episodes=3, horizon=8):
     """Record video of planning."""
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-
     print(f"\n{'='*70}")
     print(f"Recording {planner_type.upper()} with {objective.upper()} objective")
     print(f"{'='*70}\n")
 
-    # Load model
-    jepa, reward_head = load_model_and_reward_head(checkpoint_path, device, objective)
+    # Load model (device extraction happens here)
+    jepa, reward_head = load_model_and_reward_head(checkpoint_path, 'auto', objective)
 
-    # Create environment with video recording
-    print("Creating environment with video recording...")
+    # Extract device from loaded model
+    device = next(jepa.parameters()).device
+    print(f"Using device: {device}")
+
+    # Create environment WITHOUT video wrapper (we'll manually capture frames)
+    print("Creating environment...")
     config = AtariConfig(
         game_name="Breakout",
         batch_size=1,
     )
-    atari_wrapper = AtariEnv(config, render_mode="rgb_array")
-
-    # Wrap the underlying gymnasium env for video recording
-    from gymnasium.wrappers import RecordVideo
-    atari_wrapper.env = RecordVideo(
-        atari_wrapper.env,
-        output_path.parent,
-        name_prefix=output_path.stem,
-        episode_trigger=lambda x: True  # Record all episodes
-    )
-    env = atari_wrapper
+    env = AtariEnv(config, render_mode="rgb_array")
 
     # Create planner
     if planner_type == "mppi":
@@ -177,12 +140,18 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
     # Run episodes
     best_reward = -float('inf')
     best_episode = None
+    all_videos = []
 
     for episode_idx in range(num_episodes):
         obs, _ = env.reset()
         done = False
         episode_reward = 0
         episode_length = 0
+        frames = []
+
+        # Capture initial frame
+        rgb_frame = env.env.render()
+        frames.append(rgb_frame)
 
         pbar = tqdm(total=200, desc=f"Episode {episode_idx+1}/{num_episodes}", leave=True)
 
@@ -195,7 +164,7 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
 
             # Plan action
             action = planner.plan(jepa, obs_tensor, reward_head, objective, device)
-            action = int(action.item())
+            # action is already an int from the planner
 
             # Execute
             obs, reward, terminated, truncated, info = env.step(action)
@@ -203,12 +172,22 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
             episode_reward += reward
             episode_length += 1
 
+            # Capture frame after action
+            rgb_frame = env.env.render()
+            frames.append(rgb_frame)
+
             pbar.set_postfix({"reward": episode_reward, "action": ["NOOP", "FIRE", "RIGHT", "LEFT"][action]})
             pbar.update(1)
 
         pbar.close()
 
-        print(f"Episode {episode_idx+1}: Reward = {episode_reward}, Length = {episode_length}")
+        # Save this episode's video
+        video_path = output_path.parent / f"{output_path.stem}_episode{episode_idx+1}.mp4"
+        print(f"Saving episode {episode_idx+1} video to {video_path}...")
+        imageio.mimsave(str(video_path), frames, fps=30)
+        all_videos.append(video_path)
+
+        print(f"Episode {episode_idx+1}: Reward = {episode_reward}, Length = {episode_length}, Video frames = {len(frames)}")
 
         if episode_reward > best_reward:
             best_reward = episode_reward
@@ -219,7 +198,9 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
     print(f"\n{'='*70}")
     print(f"✅ Video recording complete!")
     print(f"Best episode: {best_episode} with reward {best_reward}")
-    print(f"Videos saved to: {output_path.parent}")
+    print(f"Videos saved:")
+    for vp in all_videos:
+        print(f"  - {vp}")
     print(f"{'='*70}\n")
 
 

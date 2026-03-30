@@ -573,6 +573,11 @@ def main():
                             'random: random movements. '
                             'tracking: tracks ball (recommended for JEPA). '
                             'mixed: 70%% tracking + 30%% random (recommended for JEPA).')
+    parser.add_argument('--mode', type=str, default='ram',
+                       choices=['ram', 'vision'],
+                       help='Observation mode. '
+                            'ram: save RAM state (220 bytes, compact, default). '
+                            'vision: save pixel frames (160x210 RGB, larger files).')
 
     args = parser.parse_args()
 
@@ -593,7 +598,7 @@ def main():
     print(f"  - Paddle policy: {args.paddle_policy}")
     print("="*70 + "\n")
 
-    generator = SystematicPaddleDataGenerator(game_name=args.game, mode="ram")
+    generator = SystematicPaddleDataGenerator(game_name=args.game, mode=args.mode)
 
     dataset = generator.generate_systematic_dataset(
         output_dir=args.output_dir,
