@@ -1,0 +1,74 @@
+# ATARI Breakout Training Configuration with Human Gameplay Dataset
+# This configuration uses human gameplay trajectories from ATARI-HEAD dataset
+
+logging:
+  log_wandb: true
+  wandb_group:
+  wandb_sweep:
+  log_every: 10
+  exp_suffix: atari_human_test
+  save_every_n_epochs: 1
+  tqdm_silent: false
+
+meta:
+  model_folder:
+  load_model: true
+  enable_plan_eval: false  # Disable for quick test
+  eval_every_itr: -1
+  light_eval_freq: -1  # Disable for quick test
+  seed: 1
+
+data:
+  env_name: atari
+  game_name: Breakout
+  batch_size: 4  # Smaller batch for quick test
+  size: 6  # 6 trajectories from human gameplay
+  val_size: 1  # Use 1 for validation
+  num_workers: 0
+  pin_mem: false
+  persistent_workers: false
+  # Human gameplay dataset settings
+  use_systematic_dataset: true
+  systematic_dataset_path: data/systematic_sweep/breakout_human_gameplay.pkl
+
+training:
+  use_amp: true
+  dtype: bfloat16
+
+model:
+  compile: true
+  dobs: 1  # Grayscale
+  henc: 256
+  hpre: 256
+  dstc: 256
+  nsteps: 8
+  encoder_architecture: impala  # impala | resnet | conv
+  train_rollout: last  # last | all
+  encoder_skip_connections: true
+  predictor_skip_connections: true
+  action_embedding_dim: 64  # Embedding dimension for discrete actions
+  # Reward prediction settings
+  reward_prediction: true  # Enable reward prediction head
+  reward_head_hidden_dim: 256  # Hidden dimension for reward head
+  reward_loss_coeff: 1.0  # Coefficient for reward prediction loss
+  regularizer:
+    cov_coeff: 8
+    std_coeff: 16
+    sim_coeff_t: 12
+    idm_coeff: 1
+    first_t_only: false
+    spatial_as_samples: false
+    use_proj: false
+    idm_after_proj: false
+    sim_t_after_proj: false
+
+optim:
+  epochs: 1  # Just 1 epoch for quick verification
+  lr: 0.0001
+  grad_clip_enc: 2.0
+  grad_clip_pred: 2.0
+  weight_decay: 1.e-5
+
+eval:
+  plan_cfg_path: examples/ac_video_jepa/cfgs/planning_mppi.yaml
+  eval_cfg_path: examples/ac_video_jepa/cfgs/eval.yaml

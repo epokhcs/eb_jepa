@@ -133,7 +133,7 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
 
     # Create planner
     if planner_type == "mppi":
-        planner = MPPIPlanner(num_actions=4, horizon=horizon, num_samples=50)
+        planner = MPPIPlanner(num_actions=4, horizon=horizon, num_samples=200, temperature=0.5)
     else:
         raise NotImplementedError(f"Planner {planner_type} not implemented for video recording")
 
@@ -165,6 +165,10 @@ def record_video(checkpoint_path, planner_type, objective, output_path, num_epis
             # Plan action
             action = planner.plan(jepa, obs_tensor, reward_head, objective, device)
             # action is already an int from the planner
+
+            # Debug: print first few actions
+            if episode_length < 5:
+                print(f"  Step {episode_length}: Selected action = {action} ({['NOOP', 'FIRE', 'RIGHT', 'LEFT'][action]})")
 
             # Execute
             obs, reward, terminated, truncated, info = env.step(action)

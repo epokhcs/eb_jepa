@@ -229,3 +229,18 @@ eb_jepa_ICLR/
 arxiv/
 arxiv_tmp/
 CLAUDE.md
+
+# Data files and datasets
+data/
+*.pkl
+
+# Videos and recordings
+videos/
+
+# macOS
+.DS_Store
+
+# Training logs (keep configs only)
+logs/training/*/*.csv
+logs/training/*/*.json
+!logs/training/*/config.json
