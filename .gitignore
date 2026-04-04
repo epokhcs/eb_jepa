@@ -236,6 +236,7 @@ data/
 
 # Videos and recordings
 videos/
+visualizations/
 
 # macOS
 .DS_Store

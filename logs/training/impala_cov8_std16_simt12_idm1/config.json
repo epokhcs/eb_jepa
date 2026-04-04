@@ -4,7 +4,7 @@
     "wandb_group": null,
     "wandb_sweep": null,
     "log_every": 10,
-    "exp_suffix": "atari",
+    "exp_suffix": "atari_tracking",
     "save_every_n_epochs": 1,
     "tqdm_silent": false
   },
@@ -25,7 +25,8 @@
     "num_workers": 0,
     "pin_mem": false,
     "persistent_workers": false,
-    "dataset_path": "data/systematic_sweep/breakout_systematic_paddle_sweep.pkl"
+    "use_systematic_dataset": true,
+    "systematic_dataset_path": "data/tracking_policy/breakout_systematic_paddle_sweep.pkl"
   },
   "training": {
     "use_amp": true,
@@ -42,10 +43,13 @@
     "train_rollout": "last",
     "encoder_skip_connections": true,
     "predictor_skip_connections": true,
-    "action_embedding_dim": 32,
+    "action_embedding_dim": 4,
     "reward_prediction": true,
     "reward_head_hidden_dim": 256,
     "reward_loss_coeff": 1.0,
+    "reward_use_class_weights": true,
+    "reward_positive_weight": 100.0,
+    "reward_threshold": 0.5,
     "regularizer": {
       "cov_coeff": 8,
       "std_coeff": 16,
@@ -59,7 +63,7 @@
     }
   },
   "optim": {
-    "epochs": 10,
+    "epochs": 20,
     "lr": 0.0001,
     "grad_clip_enc": 2.0,
     "grad_clip_pred": 2.0,
